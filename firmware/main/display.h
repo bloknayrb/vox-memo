@@ -90,5 +90,21 @@ void display_memo_playback_done(void);
  */
 void *display_get_i2c_handle(void);
 
+/**
+ * Screen sleep/wake.
+ *
+ * display_note_activity() — call on any user input to reset the inactivity
+ *   timer and wake the display if sleeping.
+ * display_tick_inactivity() — call once per second (when not recording) to
+ *   advance the inactivity counter and sleep after DISPLAY_SLEEP_TIMEOUT_SEC.
+ */
+#define DISPLAY_SLEEP_TIMEOUT_SEC  30
+
+void display_sleep(void);
+void display_wake(void);
+bool display_is_sleeping(void);
+void display_note_activity(void);
+void display_tick_inactivity(void);
+
 // Note: LVGL tick and task handling are managed by esp_lvgl_port.
 // No manual display_tick() or display_task_handler() needed.

@@ -101,8 +101,10 @@ void app_main(void) {
             // Update Wi-Fi indicator
             display_update_wifi(network_is_connected());
 
-            // IMU wake/sleep (Phase 6)
-            // if (imu_face_down()) { display off } else if (imu_picked_up()) { display on }
+            // Advance inactivity timer (skip while recording to keep screen on)
+            if (!audio_is_recording()) {
+                display_tick_inactivity();
+            }
         }
 
         loop_count++;

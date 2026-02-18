@@ -20,6 +20,10 @@ static const char *TAG = "display";
 // Set to true only after hardware is initialized and LVGL screens are created.
 static bool display_ready = false;
 
+// Screen sleep state
+static bool display_sleeping = false;
+static int inactivity_seconds = 0;
+
 // Hardware handles
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static esp_lcd_panel_io_handle_t io_handle = NULL;
@@ -677,4 +681,42 @@ void display_memo_playback_done(void) {
 
 void *display_get_i2c_handle(void) {
     return (void *)i2c_handle;
+}
+
+void display_sleep(void) {
+    if (!display_ready || display_sleeping) return;
+    esp_lcd_panel_disp_on_off(panel_handle, false);
+    display_sleeping = true;
+    ESP_LOGI(TAG, "Display sleeping");
+}
+
+void display_wake(void) {
+    if (!display_ready || !display_sleeping) return;
+    esp_lcd_panel_disp_on_off(panel_handle, true);
+    display_sleeping = false;
+    inactivity_seconds = 0;
+    // Force a full redraw so the screen content is restored
+    lvgl_port_lock(0);
+    lv_obj_invalidate(lv_scr_act());
+    lvgl_port_unlock();
+    ESP_LOGI(TAG, "Display waking");
+}
+
+bool display_is_sleeping(void) {
+    return display_sleeping;
+}
+
+void display_note_activity(void) {
+    inactivity_seconds = 0;
+    if (display_sleeping) {
+        display_wake();
+    }
+}
+
+void display_tick_inactivity(void) {
+    if (display_sleeping) return;
+    inactivity_seconds++;
+    if (inactivity_seconds >= DISPLAY_SLEEP_TIMEOUT_SEC) {
+        display_sleep();
+    }
 }

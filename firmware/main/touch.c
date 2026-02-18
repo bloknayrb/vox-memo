@@ -43,9 +43,10 @@ void touch_poll(void) {
     bool pressed = (gpio_get_level(BTN_RECORD_GPIO) == 0);
 
     if (pressed && !btn_record_held) {
-        // Button just pressed — start recording
+        // Button just pressed — wake display or start recording
+        display_note_activity();
         btn_record_held = true;
-        if (!audio_is_recording()) {
+        if (!audio_is_recording() && !display_is_sleeping()) {
             ESP_LOGI(TAG, "Record button pressed — starting recording");
             audio_start_recording();
             display_show_screen(SCREEN_RECORDING);
@@ -78,4 +79,8 @@ void touch_poll(void) {
 
     // --- Touch (FT3168) ---
     // Handled by LVGL input device registered in display_init() — no polling needed here.
+    // Read INT pin to detect screen touches for inactivity tracking.
+    if (gpio_get_level(BSP_TOUCH_INT) == 0) {
+        display_note_activity();
+    }
 }
