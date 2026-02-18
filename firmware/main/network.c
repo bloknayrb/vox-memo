@@ -196,7 +196,7 @@ esp_err_t network_init(void) {
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "Wi-Fi initialized (%d networks), connecting to '%s'...",
-             (int)WIFI_ENTRY_COUNT, entry->ssid);
+             (int)WIFI_ENTRY_COUNT, wifi_entries[wifi_entry_idx].ssid);
     return ESP_OK;
 }
 
