@@ -2,7 +2,7 @@
 
 Press-to-talk voice capture device that transcribes and drops notes into Obsidian.
 
-**Hardware:** Waveshare ESP32-C6-Touch-AMOLED-1.8
+**Hardware:** Waveshare ESP32-C6-Touch-AMOLED-1.47
 
 ## How it works
 

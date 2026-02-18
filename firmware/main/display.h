@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Waveshare ESP32-C6-Touch-AMOLED-1.8 — SH8601 QSPI display
+// Waveshare ESP32-C6-Touch-AMOLED-1.47 — SH8601 QSPI display
 // Resolution: 368 x 448
 #define DISP_WIDTH   368
 #define DISP_HEIGHT  448
@@ -27,10 +27,6 @@
 // I2C bus (shared with audio codec)
 #define BSP_I2C_SCL     GPIO_NUM_7
 #define BSP_I2C_SDA     GPIO_NUM_8
-
-// Sage green accent color
-// In RGB565: R=0x5C>>3=0x0B, G=0x99>>2=0x26, B=0x7C>>3=0x0F
-#define COLOR_SAGE_GREEN  0x5B2F  // Approximate RGB565 for #5C997C
 
 // Screen IDs
 typedef enum {
@@ -62,7 +58,7 @@ void display_next_screen(void);
 void display_update_time(int hour, int min);
 void display_update_wifi(bool connected, const char *ssid);
 void display_update_queue_badge(int count);
-void display_update_battery(int percent);  // Phase 6: called by AXP2101 driver
+void display_update_battery(int percent);
 
 /**
  * Update sync progress on idle screen.
@@ -121,4 +117,3 @@ void display_tick_inactivity(void);
 void display_set_brightness(uint8_t level);
 
 // Note: LVGL tick and task handling are managed by esp_lvgl_port.
-// No manual display_tick() or display_task_handler() needed.

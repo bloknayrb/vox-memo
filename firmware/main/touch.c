@@ -32,9 +32,6 @@ esp_err_t touch_init(void) {
     // FT3168 touch is initialized in display_init() via esp_lcd_touch (FT5x06 driver).
     // Touch events are handled by the LVGL input device registered in display.c.
 
-    // AXP2101 PMIC PWR button polling is Phase 6 (pending AXP2101 driver integration).
-    // Will read IRQ status register via I2C to detect PKEY press/release.
-
     ESP_LOGI(TAG, "Touch/button input initialized");
     return ESP_OK;
 }
@@ -53,27 +50,15 @@ void touch_poll(void) {
             display_show_screen(SCREEN_RECORDING);
         }
     } else if (!pressed && btn_record_held) {
-        // Button just released — stop recording if still active
+        // Button just released — stop recording.
+        // audio_stop_recording handles the case where max-duration auto-stop
+        // already fired (recording=false), consuming the done semaphore.
         btn_record_held = false;
-        if (audio_is_recording()) {
-            ESP_LOGI(TAG, "Record button released — stopping recording");
-            bool discarded = false;
-            audio_stop_recording(&discarded);
-            display_show_screen(SCREEN_IDLE);
-            if (!discarded) {
-                badge_update_at_us = esp_timer_get_time() + 200000;
-            }
-        } else {
-            // Max-duration auto-stop already fired while button was held.
-            // recording_task set recording=false, so audio_is_recording() is
-            // already false — but we still need to wait for finalization and
-            // update the badge.
-            bool discarded = false;
-            audio_stop_recording(&discarded);
-            display_show_screen(SCREEN_IDLE);
-            if (!discarded) {
-                badge_update_at_us = esp_timer_get_time() + 200000;
-            }
+        bool discarded = false;
+        audio_stop_recording(&discarded);
+        display_show_screen(SCREEN_IDLE);
+        if (!discarded) {
+            badge_update_at_us = esp_timer_get_time() + 200000;
         }
     }
 
@@ -87,9 +72,6 @@ void touch_poll(void) {
         badge_update_at_us = 0;
         display_update_queue_badge(audio_get_memo_count());
     }
-
-    // --- PWR button (AXP2101 PKEY) — Phase 6 ---
-    // Poll AXP2101 IRQ status register via I2C; on PKEY short press: display_next_screen()
 
     // --- Touch (FT3168) ---
     // Handled by LVGL input device registered in display_init() — no polling needed here.

@@ -7,7 +7,6 @@ idf_component_register(
         "es8311.c"
         "touch.c"
         "network.c"
-        "imu.c"
         "usb_sync.c"
     INCLUDE_DIRS "."
     REQUIRES

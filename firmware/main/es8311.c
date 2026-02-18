@@ -88,14 +88,19 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
     ESP_RETURN_ON_ERROR(es_write(REG_RESET, 0x00), TAG, "Soft reset release failed");
 
     /* Clock manager — MCLK=4.096MHz from pin, BCLK div=8, OSR for 16kHz */
-    es_write(REG_CLK1, 0x00);  /* MCLK from pin, pre-div=1 */
-    es_write(REG_CLK2, 0x00);  /* MCLK integer div=1 (passthrough) */
-    es_write(REG_CLK3, 0x00);  /* ADC single-speed, BCLK div MSBs=0 */
-    es_write(REG_CLK4, 0x08);  /* ADC BCLK div N=8 → 512kHz */
-    es_write(REG_CLK5, 0x00);  /* DAC single-speed */
-    es_write(REG_CLK6, 0x08);  /* DAC BCLK div N=8 */
-    es_write(REG_CLK7, 0x7F);  /* OSR config for 16kHz (from esp-adf table) */
-    es_write(REG_CLK8, 0x00);  /* ADC OSR = 256x (best SNR) */
+    esp_err_t clk_ret = ESP_OK;
+    clk_ret |= es_write(REG_CLK1, 0x00);  /* MCLK from pin, pre-div=1 */
+    clk_ret |= es_write(REG_CLK2, 0x00);  /* MCLK integer div=1 (passthrough) */
+    clk_ret |= es_write(REG_CLK3, 0x00);  /* ADC single-speed, BCLK div MSBs=0 */
+    clk_ret |= es_write(REG_CLK4, 0x08);  /* ADC BCLK div N=8 → 512kHz */
+    clk_ret |= es_write(REG_CLK5, 0x00);  /* DAC single-speed */
+    clk_ret |= es_write(REG_CLK6, 0x08);  /* DAC BCLK div N=8 */
+    clk_ret |= es_write(REG_CLK7, 0x7F);  /* OSR config for 16kHz (from esp-adf table) */
+    clk_ret |= es_write(REG_CLK8, 0x00);  /* ADC OSR = 256x (best SNR) */
+    if (clk_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Clock config failed");
+        return clk_ret;
+    }
 
     /* I2S format: Philips standard, 16-bit — critical for correct audio capture */
     ESP_RETURN_ON_ERROR(es_write(REG_SDPIN,  0x0C), TAG, "I2S DAC format failed");

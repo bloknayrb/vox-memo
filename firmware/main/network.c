@@ -68,6 +68,14 @@ static esp_timer_handle_t reconnect_timer = NULL;
 
 static void try_next_entry(void);
 
+static void set_wifi_config(const wifi_entry_t *entry) {
+    wifi_config_t wifi_cfg = {};
+    strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+    strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
+    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+}
+
 static void reconnect_timer_cb(void *arg) {
     if (wifi_state == WIFI_STATE_TRANSITIONING) return;  // SSID switch in progress
     wifi_state = WIFI_STATE_CONNECTING;
@@ -148,12 +156,7 @@ static void try_next_entry(void) {
     esp_wifi_disconnect();
     esp_wifi_stop();
 
-    wifi_config_t wifi_cfg = {};
-    strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
-    strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
-    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    set_wifi_config(entry);
     esp_wifi_start();  // triggers WIFI_EVENT_STA_START → esp_wifi_connect()
 }
 
@@ -188,14 +191,8 @@ esp_err_t network_init(void) {
 
     // Start with first WiFi entry
     wifi_entry_idx = 0;
-    const wifi_entry_t *entry = &wifi_entries[wifi_entry_idx];
-    wifi_config_t wifi_cfg = {};
-    strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
-    strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
-    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+    set_wifi_config(&wifi_entries[wifi_entry_idx]);
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "Wi-Fi initialized (%d networks), connecting to '%s'...",

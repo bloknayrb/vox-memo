@@ -1,7 +1,7 @@
 /**
  * Vox Memo — Voice-to-Obsidian capture device
  *
- * ESP32-C6-Touch-AMOLED-1.8 firmware
+ * ESP32-C6-Touch-AMOLED-1.47 firmware
  * Press-to-talk → record to flash → auto-sync to PC → Obsidian Inbox/
  */
 
@@ -18,7 +18,6 @@
 #include "audio.h"
 #include "axp2101.h"
 #include "display.h"
-#include "imu.h"
 #include "network.h"
 #include "touch.h"
 #include "usb_sync.h"
@@ -74,7 +73,6 @@ void app_main(void) {
 
     ESP_ERROR_CHECK(audio_init());
     ESP_ERROR_CHECK(touch_init());
-    ESP_ERROR_CHECK(imu_init());
 
     // Log heap after all subsystem init — critical for SRAM budget validation
     ESP_LOGI(TAG, "Free heap after init: %lu bytes", (unsigned long)esp_get_free_heap_size());
@@ -103,7 +101,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "=== Vox Memo ready ===");
 
     // Main loop: LVGL rendering + input polling + status updates
-    int loop_count = 0;
+    uint32_t loop_count = 0;
     bool prev_vbus = false;
     while (1) {
         // Poll inputs (buttons + touch)

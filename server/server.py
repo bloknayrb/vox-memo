@@ -1,16 +1,17 @@
 """Vox Memo — FastAPI server that receives audio from ESP32, transcribes, and saves to Obsidian."""
 
+import array
 import json
+import math
 import os
-import shutil
 import tempfile
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
-import openai
 import uvicorn
 from fastapi import FastAPI, Request, Response
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 import config
 
@@ -28,8 +29,7 @@ def get_openai() -> OpenAI:
 
 
 def transcribe(audio_path: Path) -> str:
-    """Transcribe WAV file using OpenAI Whisper API. Raises openai.OpenAIError on failure."""
-    import wave, array, math
+    """Transcribe WAV file using OpenAI Whisper API. Raises OpenAIError on failure."""
     with wave.open(str(audio_path)) as wf:
         pcm = wf.readframes(wf.getnframes())
         samples = array.array('h', pcm)
@@ -68,7 +68,7 @@ def cleanup(raw_text: str) -> dict | None:
         )
         result_text = response.choices[0].message.content.strip()
         return json.loads(result_text)
-    except Exception as e:
+    except (OpenAIError, json.JSONDecodeError, KeyError) as e:
         print(f"Cleanup failed: {e}")
         return None
 
@@ -141,12 +141,12 @@ async def receive_memo(request: Request):
         if config.ARCHIVE_AUDIO:
             archive_dir = config.OBSIDIAN_INBOX / "audio"
             archive_dir.mkdir(exist_ok=True)
-            shutil.copy2(tmp_path, archive_dir / f"{ts_slug}.wav")
+            (archive_dir / f"{ts_slug}.wav").write_bytes(body)
 
         # Step 1: Transcribe
         try:
             raw_text = transcribe(tmp_path)
-        except openai.OpenAIError as e:
+        except OpenAIError as e:
             print(f"Transcription error: {e}")
             return Response(status_code=503, content="Transcription service unavailable")
         if not raw_text.strip():

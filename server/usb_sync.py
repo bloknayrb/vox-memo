@@ -154,9 +154,11 @@ def connect(port: str | None, baud: int) -> serial.Serial | None:
         return None
 
 
-def sync_once(ser: serial.Serial, server_url: str, keep_files: bool) -> int:
+def sync_once(ser: serial.Serial, server_url: str, keep_files: bool,
+              memos: list[tuple[str, int]] | None = None) -> int:
     """Run one sync cycle. Returns number of memos successfully transferred."""
-    memos = list_memos(ser)
+    if memos is None:
+        memos = list_memos(ser)
     if not memos:
         return 0
 
@@ -298,7 +300,7 @@ def main():
         ser.close()
         sys.exit(1)
 
-    synced = sync_once(ser, args.server, args.no_delete)
+    synced = sync_once(ser, args.server, args.no_delete, memos=memos)
     ser.close()
     print(f"\nDone: {synced}/{len(memos)} memos synced")
 

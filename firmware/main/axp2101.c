@@ -55,9 +55,16 @@ esp_err_t axp2101_init(i2c_master_bus_handle_t i2c_bus)
 
     // Enable fuel gauge (ADC for battery SOC)
     uint8_t adc_en = 0;
-    axp_read(REG_ADC_ENABLE, &adc_en);
-    adc_en |= 0x01;  // Enable battery gauge
-    axp_write(REG_ADC_ENABLE, adc_en);
+    ret = axp_read(REG_ADC_ENABLE, &adc_en);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read ADC enable register — battery gauge may not work");
+    } else {
+        adc_en |= 0x01;  // Enable battery gauge
+        ret = axp_write(REG_ADC_ENABLE, adc_en);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to enable fuel gauge — battery SOC unavailable");
+        }
+    }
 
     ESP_LOGI(TAG, "AXP2101 initialized (status=0x%02X)", status);
     return ESP_OK;

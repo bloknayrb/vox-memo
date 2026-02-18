@@ -662,9 +662,9 @@ void display_update_recording(int elapsed_sec, int max_sec) {
         lv_label_set_text_fmt(lbl_rec_time, "%d:%02d", elapsed_sec / 60, elapsed_sec % 60);
     }
     if (obj_pulse) {
+        static const lv_opa_t pulse_opa[] = {LV_OPA_50, LV_OPA_80, LV_OPA_60};
         int phase = (elapsed_sec * 2) % 3;
-        lv_opa_t opa = (phase == 0) ? LV_OPA_50 : (phase == 1) ? LV_OPA_80 : LV_OPA_60;
-        lv_obj_set_style_bg_opa(obj_pulse, opa, 0);
+        lv_obj_set_style_bg_opa(obj_pulse, pulse_opa[phase], 0);
     }
     if (lbl_rec_hint && max_sec - elapsed_sec <= 10) {
         lv_label_set_text_fmt(lbl_rec_hint, "Auto-stop in %ds", max_sec - elapsed_sec);
@@ -728,8 +728,6 @@ void display_refresh_memo_list(void) {
 
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, label_text);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0x5C997C), 0);
 
         // Register delete callback to free the strdup'd path when the button is destroyed
         lv_obj_add_event_cb(btn, memo_item_delete_cb, LV_EVENT_DELETE, memos[i]);

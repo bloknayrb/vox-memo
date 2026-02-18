@@ -50,14 +50,15 @@ class MemoHandler(FileSystemEventHandler):
                 text = path.read_text(encoding="utf-8")
                 if text.strip():
                     return text
-            except (OSError, PermissionError):
+            except OSError:
                 pass
             time.sleep(delay)
         return None
 
     def _extract_preview(self, content: str) -> str:
-        # Strip YAML frontmatter
+        # Strip YAML frontmatter and leading markdown heading
         body = re.sub(r"^---.*?---\s*", "", content, count=1, flags=re.DOTALL)
+        body = re.sub(r"^#+\s+[^\n]*\n*", "", body)
         body = body.strip()
         if len(body) > MAX_PREVIEW:
             body = body[:MAX_PREVIEW] + "..."

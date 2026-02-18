@@ -31,8 +31,8 @@
 
 // Recording limits
 #define AUDIO_MAX_DURATION_SEC  120
-#define AUDIO_MIN_DURATION_BYTES (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * (AUDIO_BITS / 8) * 1)  // 1 second
 #define AUDIO_BYTES_PER_SEC     (AUDIO_SAMPLE_RATE * (AUDIO_BITS / 8) * AUDIO_CHANNELS)
+#define AUDIO_MIN_DURATION_BYTES  AUDIO_BYTES_PER_SEC  // 1 second minimum
 
 // Memo storage path on LittleFS
 #define MEMO_BASE_PATH      "/memos"
