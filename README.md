@@ -8,7 +8,7 @@ Press-to-talk voice capture device that transcribes and drops notes into Obsidia
 
 1. **Hold button** → speak your thought → **release** — audio saves to flash
 2. When on home Wi-Fi, device auto-syncs queued memos to PC backend
-3. PC transcribes (faster-whisper) → Claude cleans up + tags → markdown note lands in `Inbox/`
+3. PC transcribes (OpenAI Whisper API) → GPT-4o-mini cleans up + tags → markdown note lands in `Inbox/`
 
 Capture is fully offline. All intelligence runs on the PC.
 
@@ -24,19 +24,33 @@ firmware/       ESP32-C6 firmware (ESP-IDF + LVGL)
     network.c/h Wi-Fi + HTTP upload to PC server
     imu.c/h     QMI8658 wake/sleep detection
 
-server/         Python backend
-  server.py     FastAPI — receives audio, transcribes, saves markdown
-  config.py     Settings (whisper model, output path, etc.)
+server/              Python backend
+  server.py          FastAPI — receives audio, transcribes, saves markdown
+  config.py          Settings (paths, models, archive toggle)
+  Dockerfile         Container build
+  docker-compose.yml Compose config with Obsidian volume mount
+  .env.example       Environment variable template
 ```
 
 ## Setup
 
 ### PC Backend
 
+**Primary (Docker):**
+
+```bash
+cp server/.env.example server/.env
+# Fill in OPENAI_API_KEY and OBSIDIAN_INBOX_HOST (path to your Obsidian inbox)
+cd server
+docker compose up -d --build
+```
+
+**Alternative (bare Python):**
+
 ```bash
 cd server
 uv sync
-# Set ANTHROPIC_API_KEY in environment for Claude cleanup
+export OPENAI_API_KEY=sk-...
 uv run python server.py
 ```
 
@@ -52,6 +66,10 @@ Requires [ESP-IDF v5.3+](https://docs.espressif.com/projects/esp-idf/en/stable/e
 # Clone Waveshare components
 git clone https://github.com/waveshareteam/Waveshare-ESP32-components ~/GitHub/Waveshare-ESP32-components
 
+# Configure credentials
+cp firmware/main/secrets.h.example firmware/main/secrets.h
+# Edit secrets.h: fill in SSID, password, server IP
+
 # Build and flash
 cd firmware
 idf.py set-target esp32c6
@@ -59,15 +77,6 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 
-Before building, update:
-- `network.c`: Wi-Fi SSID/password and server IP
-- `audio.c`: Verify I2S GPIO pins against your board's schematic
+## Status
 
-## Implementation phases
-
-- [x] Phase 1: ESP32 hello world — display, buttons, mic verify
-- [ ] Phase 2: Record to flash — button hold/release, WAV files
-- [ ] Phase 3: PC backend MVP — transcription pipeline
-- [ ] Phase 4: Wi-Fi sync — auto-upload queued memos
-- [ ] Phase 5: LVGL UI — idle/recording/queue/sync screens
-- [ ] Phase 6: Polish — Claude cleanup, IMU, battery indicator
+Fully functional. All phases complete.
