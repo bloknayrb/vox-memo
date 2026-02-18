@@ -119,7 +119,7 @@ void app_main(void) {
             display_update_time(t.tm_hour, t.tm_min);
 
             // Update Wi-Fi indicator
-            display_update_wifi(network_is_connected());
+            display_update_wifi(network_is_connected(), network_get_ssid());
 
             // Update battery every ~10 seconds
             if (loop_count % 1000 == 0) {

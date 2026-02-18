@@ -3,7 +3,7 @@
 #include "esp_err.h"
 #include <stdbool.h>
 
-// Server port (home and work IPs defined in network.c)
+// Server port (IPs defined per-network in network.c)
 #define SERVER_PORT       8000
 #define SYNC_INTERVAL_MS  30000  // Check for queued memos every 30s
 
@@ -32,6 +32,11 @@ esp_err_t network_upload_memo(const char *filepath, char *title_out, size_t titl
  * @return ESP_OK if server responds to GET /health
  */
 esp_err_t network_check_server(void);
+
+/**
+ * Returns the SSID of the currently connected network, or NULL if not connected.
+ */
+const char *network_get_ssid(void);
 
 /**
  * Background sync task — call from a FreeRTOS task.

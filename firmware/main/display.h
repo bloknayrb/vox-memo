@@ -60,9 +60,15 @@ void display_next_screen(void);
  * Update idle screen elements.
  */
 void display_update_time(int hour, int min);
-void display_update_wifi(bool connected);
+void display_update_wifi(bool connected, const char *ssid);
 void display_update_queue_badge(int count);
 void display_update_battery(int percent);  // Phase 6: called by AXP2101 driver
+
+/**
+ * Update sync progress on idle screen.
+ * Pass NULL or "" to hide. Called from network sync task.
+ */
+void display_update_sync_status(const char *status);
 
 /**
  * Update recording screen.

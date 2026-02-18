@@ -42,6 +42,7 @@ static lv_obj_t *lbl_prompt = NULL;
 static lv_obj_t *lbl_wifi = NULL;
 static lv_obj_t *lbl_queue = NULL;
 static lv_obj_t *lbl_battery = NULL;
+static lv_obj_t *lbl_sync_progress = NULL;
 
 // Recording screen widgets
 static lv_obj_t *lbl_rec_time = NULL;
@@ -302,6 +303,11 @@ static void create_idle_screen(void) {
     lv_label_set_text(lbl_queue, "");
     lv_obj_align(lbl_queue, LV_ALIGN_CENTER, 0, -20);
 
+    lbl_sync_progress = lv_label_create(scr);
+    lv_obj_add_style(lbl_sync_progress, &style_dim, 0);
+    lv_label_set_text(lbl_sync_progress, "");
+    lv_obj_align(lbl_sync_progress, LV_ALIGN_CENTER, 0, 10);
+
     lbl_prompt = lv_label_create(scr);
     lv_obj_add_style(lbl_prompt, &style_dim, 0);
     lv_label_set_text(lbl_prompt, "Hold to record");
@@ -311,6 +317,8 @@ static void create_idle_screen(void) {
     lv_obj_add_style(lbl_wifi, &style_dim, 0);
     lv_label_set_text(lbl_wifi, "No Wi-Fi");
     lv_obj_align(lbl_wifi, LV_ALIGN_TOP_LEFT, 10, 10);
+    lv_obj_set_width(lbl_wifi, 180);
+    lv_label_set_long_mode(lbl_wifi, LV_LABEL_LONG_CLIP);
 
     lbl_battery = lv_label_create(scr);
     lv_obj_add_style(lbl_battery, &style_dim, 0);
@@ -609,10 +617,14 @@ void display_update_time(int hour, int min) {
     lvgl_port_unlock();
 }
 
-void display_update_wifi(bool connected) {
+void display_update_wifi(bool connected, const char *ssid) {
     if (!display_ready || !lbl_wifi) return;
     lvgl_port_lock(0);
-    lv_label_set_text(lbl_wifi, connected ? "Wi-Fi" : "No Wi-Fi");
+    if (connected && ssid && ssid[0]) {
+        lv_label_set_text(lbl_wifi, ssid);
+    } else {
+        lv_label_set_text(lbl_wifi, connected ? "Wi-Fi" : "No Wi-Fi");
+    }
     lvgl_port_unlock();
 }
 
@@ -631,6 +643,13 @@ void display_update_battery(int percent) {
     if (!display_ready || !lbl_battery) return;
     lvgl_port_lock(0);
     lv_label_set_text_fmt(lbl_battery, "%d%%", percent);
+    lvgl_port_unlock();
+}
+
+void display_update_sync_status(const char *status) {
+    if (!display_ready || !lbl_sync_progress) return;
+    lvgl_port_lock(0);
+    lv_label_set_text(lbl_sync_progress, status ? status : "");
     lvgl_port_unlock();
 }
 

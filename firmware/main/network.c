@@ -26,15 +26,37 @@ static const char *TAG = "network";
 // Wi-Fi credentials and server IPs from secrets.h (gitignored)
 #include "secrets.h"
 
-// Active server IP (set at runtime after health check)
+// Multi-SSID entry — each network has its own SSID, password, and server IP
+typedef struct {
+    const char *ssid;
+    const char *password;
+    const char *server_ip;
+} wifi_entry_t;
+
+static const wifi_entry_t wifi_entries[] = {
+    {WIFI_SSID,         WIFI_PASS_HOME,    SERVER_IP_HOME},
+#ifdef WIFI_SSID_HOTSPOT
+    {WIFI_SSID_HOTSPOT, WIFI_PASS_HOTSPOT, SERVER_IP_HOTSPOT},
+#endif
+};
+#define WIFI_ENTRY_COUNT (sizeof(wifi_entries) / sizeof(wifi_entries[0]))
+
+static int wifi_entry_idx = 0;
+
+// Active server IP (set from current wifi entry or health check)
 static char active_server_ip[16] = SERVER_IP_HOME;
 
 // Track whether SNTP has been initialized
 static bool sntp_started = false;
 
-// Password rotation — alternate on auth failure
-static const char *wifi_passwords[] = {WIFI_PASS_HOME, WIFI_PASS_WORK};
-static int wifi_pass_idx = 0;
+// WiFi state machine — prevents reconnect timer from firing during SSID transitions
+typedef enum {
+    WIFI_STATE_IDLE,
+    WIFI_STATE_CONNECTING,
+    WIFI_STATE_TRANSITIONING,  // stop/start cycle in progress
+} wifi_state_t;
+
+static wifi_state_t wifi_state = WIFI_STATE_IDLE;
 
 // Event group for Wi-Fi connection tracking
 static EventGroupHandle_t wifi_events;
@@ -43,63 +65,94 @@ static EventGroupHandle_t wifi_events;
 // One-shot timer for reconnect delay (avoids blocking the system event task)
 static esp_timer_handle_t reconnect_timer = NULL;
 
-static void try_next_password(void);
+static void try_next_entry(void);
 
 static void reconnect_timer_cb(void *arg) {
+    if (wifi_state == WIFI_STATE_TRANSITIONING) return;  // SSID switch in progress
+    wifi_state = WIFI_STATE_CONNECTING;
     esp_wifi_connect();
+}
+
+static void schedule_reconnect(void) {
+    if (reconnect_timer == NULL) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = reconnect_timer_cb,
+            .name = "wifi_reconnect",
+        };
+        esp_timer_create(&timer_args, &reconnect_timer);
+    } else {
+        esp_timer_stop(reconnect_timer);
+    }
+    esp_timer_start_once(reconnect_timer, 2000000 /* 2s in µs */);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        wifi_state = WIFI_STATE_CONNECTING;
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT);
-        display_update_wifi(false);
+        display_update_wifi(false, NULL);
 
-        // Auth failure — try the other password
-        if (disc->reason == WIFI_REASON_AUTH_FAIL || disc->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT) {
-            ESP_LOGW(TAG, "Auth failed, trying next password");
-            wifi_pass_idx = (wifi_pass_idx + 1) % 2;
-            try_next_password();
+        if (wifi_state == WIFI_STATE_TRANSITIONING) {
+            // Expected disconnect during SSID switch — don't interfere
+            return;
+        }
+
+        if (disc->reason == WIFI_REASON_AUTH_FAIL ||
+            disc->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+            disc->reason == WIFI_REASON_NO_AP_FOUND) {
+            ESP_LOGW(TAG, "WiFi failed (reason=%d), trying next network", disc->reason);
+            try_next_entry();
         } else {
             ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d), reconnecting in 2s...", disc->reason);
-            // Use a one-shot timer instead of vTaskDelay — blocking here starves system events
-            if (reconnect_timer == NULL) {
-                const esp_timer_create_args_t timer_args = {
-                    .callback = reconnect_timer_cb,
-                    .name = "wifi_reconnect",
-                };
-                esp_timer_create(&timer_args, &reconnect_timer);
-            } else {
-                esp_timer_stop(reconnect_timer);  // stop if already pending
-            }
-            esp_timer_start_once(reconnect_timer, 2000000 /* 2s in µs */);
+            schedule_reconnect();
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "Connected, IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "Connected to '%s', IP: " IPSTR,
+                 wifi_entries[wifi_entry_idx].ssid, IP2STR(&event->ip_info.ip));
+        wifi_state = WIFI_STATE_IDLE;
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
-        display_update_wifi(true);
+        display_update_wifi(true, wifi_entries[wifi_entry_idx].ssid);
 
-        // Start SNTP time sync
+        // Set active server IP from the current WiFi entry
+        strncpy(active_server_ip, wifi_entries[wifi_entry_idx].server_ip,
+                sizeof(active_server_ip) - 1);
+
+        // Start or restart SNTP after network change
         if (!sntp_started) {
             esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
             esp_netif_sntp_init(&sntp_cfg);
             sntp_started = true;
             ESP_LOGI(TAG, "SNTP time sync started");
+        } else {
+            esp_netif_sntp_start();
+            ESP_LOGI(TAG, "SNTP restarted after network change");
         }
     }
 }
 
-static void try_next_password(void) {
+static void try_next_entry(void) {
+    wifi_entry_idx = (wifi_entry_idx + 1) % WIFI_ENTRY_COUNT;
+    const wifi_entry_t *entry = &wifi_entries[wifi_entry_idx];
+
+    ESP_LOGI(TAG, "Switching to '%s' (entry %d/%d)",
+             entry->ssid, wifi_entry_idx + 1, (int)WIFI_ENTRY_COUNT);
+
+    // Full stop/start cycle required when changing SSID
+    wifi_state = WIFI_STATE_TRANSITIONING;
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+
     wifi_config_t wifi_cfg = {};
-    strncpy((char *)wifi_cfg.sta.ssid, WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
-    strncpy((char *)wifi_cfg.sta.password, wifi_passwords[wifi_pass_idx], sizeof(wifi_cfg.sta.password) - 1);
+    strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+    strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    ESP_LOGI(TAG, "Trying password slot %d for '%s'", wifi_pass_idx, WIFI_SSID);
+
     esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
-    esp_wifi_connect();
+    esp_wifi_start();  // triggers WIFI_EVENT_STA_START → esp_wifi_connect()
 }
 
 esp_err_t network_init(void) {
@@ -115,23 +168,30 @@ esp_err_t network_init(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
 
-    // Start with home password (index 0)
-    wifi_pass_idx = 0;
+    // Start with first WiFi entry
+    wifi_entry_idx = 0;
+    const wifi_entry_t *entry = &wifi_entries[wifi_entry_idx];
     wifi_config_t wifi_cfg = {};
-    strncpy((char *)wifi_cfg.sta.ssid, WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
-    strncpy((char *)wifi_cfg.sta.password, wifi_passwords[wifi_pass_idx], sizeof(wifi_cfg.sta.password) - 1);
+    strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+    strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Wi-Fi initialized, connecting to '%s'...", WIFI_SSID);
+    ESP_LOGI(TAG, "Wi-Fi initialized (%d networks), connecting to '%s'...",
+             (int)WIFI_ENTRY_COUNT, entry->ssid);
     return ESP_OK;
 }
 
 bool network_is_connected(void) {
     return (xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0;
+}
+
+const char *network_get_ssid(void) {
+    if (!network_is_connected()) return NULL;
+    return wifi_entries[wifi_entry_idx].ssid;
 }
 
 // HTTP response buffer for parsing server response
@@ -165,16 +225,21 @@ static esp_err_t probe_ip(const char *ip) {
 }
 
 esp_err_t network_check_server(void) {
-    // Try known IPs; whichever responds first becomes the active server
-    const char *candidates[] = {SERVER_IP_HOME, SERVER_IP_WORK};
-    for (int i = 0; i < 2; i++) {
-        if (probe_ip(candidates[i]) == ESP_OK) {
-            strncpy(active_server_ip, candidates[i], sizeof(active_server_ip) - 1);
-            ESP_LOGI(TAG, "Server found at %s", active_server_ip);
+    // Probe the server IP associated with the current WiFi network first,
+    // then try all other entries as fallback
+    if (probe_ip(active_server_ip) == ESP_OK) {
+        ESP_LOGI(TAG, "Server found at %s", active_server_ip);
+        return ESP_OK;
+    }
+    for (int i = 0; i < (int)WIFI_ENTRY_COUNT; i++) {
+        if (strcmp(wifi_entries[i].server_ip, active_server_ip) == 0) continue;
+        if (probe_ip(wifi_entries[i].server_ip) == ESP_OK) {
+            strncpy(active_server_ip, wifi_entries[i].server_ip, sizeof(active_server_ip) - 1);
+            ESP_LOGI(TAG, "Server found at %s (fallback)", active_server_ip);
             return ESP_OK;
         }
     }
-    ESP_LOGW(TAG, "Server not reachable at either known IP");
+    ESP_LOGW(TAG, "Server not reachable");
     return ESP_FAIL;
 }
 
@@ -311,25 +376,46 @@ void network_sync_task(void *arg) {
         if (!memos || count == 0) continue;
 
         ESP_LOGI(TAG, "Syncing %d memo(s)...", count);
+        int synced = 0;
 
         for (int i = 0; i < count; i++) {
+            char status_buf[48];
+            if (count == 1) {
+                snprintf(status_buf, sizeof(status_buf), "Syncing...");
+            } else {
+                snprintf(status_buf, sizeof(status_buf), "Syncing %d/%d...", i + 1, count);
+            }
+            display_update_sync_status(status_buf);
+
             char title[64] = {0};
             esp_err_t err = network_upload_memo(memos[i], title, sizeof(title));
             if (err == ESP_OK) {
-                // Delete from flash after successful upload
                 audio_delete_memo(memos[i]);
-                display_show_sync_result(title, true);
-
-                // Brief beep via speaker (TODO: implement in audio.c)
+                synced++;
                 ESP_LOGI(TAG, "Synced: %s -> \"%s\"", memos[i], title);
+
+                // Show full-screen result after the last memo
+                if (i == count - 1) {
+                    display_update_sync_status(NULL);
+                    display_show_sync_result(title, true);
+                }
             } else {
                 ESP_LOGW(TAG, "Failed to sync %s, will retry", memos[i]);
+                char retry_buf[48];
+                snprintf(retry_buf, sizeof(retry_buf), "Retry %d/%d...", i + 1, count);
+                display_update_sync_status(retry_buf);
             }
             free(memos[i]);
         }
         free(memos);
 
-        // Update queue badge
+        // Clear sync status and update badge
+        display_update_sync_status(NULL);
         display_update_queue_badge(audio_get_memo_count());
+
+        // If nothing synced at all, show failure on the full screen
+        if (synced == 0) {
+            display_show_sync_result("Sync failed", false);
+        }
     }
 }

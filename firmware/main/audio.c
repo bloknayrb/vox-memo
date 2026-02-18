@@ -3,6 +3,7 @@
 #include "es8311.h"
 
 #include <dirent.h>
+#include "esp_littlefs.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -36,6 +37,7 @@ static int64_t rec_start_us = 0;
 static uint32_t rec_bytes_written = 0;
 static char rec_filepath[64] = {0};
 static volatile bool last_rec_discarded = false;
+static int rec_max_sec = AUDIO_MAX_DURATION_SEC;
 
 // WAV header for 16kHz 16-bit mono PCM
 typedef struct __attribute__((packed)) {
@@ -81,8 +83,8 @@ static void recording_task(void *arg) {
     while (recording) {
         // Check max duration
         int elapsed = (int)((esp_timer_get_time() - rec_start_us) / 1000000);
-        if (elapsed >= AUDIO_MAX_DURATION_SEC) {
-            ESP_LOGW(TAG, "Max duration reached (%ds), stopping", AUDIO_MAX_DURATION_SEC);
+        if (elapsed >= rec_max_sec) {
+            ESP_LOGW(TAG, "Max duration reached (%ds), stopping", rec_max_sec);
             recording = false;
             break;
         }
@@ -201,6 +203,12 @@ esp_err_t audio_start_recording(void) {
              t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
              t.tm_hour, t.tm_min, t.tm_sec);
 
+    size_t lfs_total = 0, lfs_used = 0;
+    esp_littlefs_info("storage", &lfs_total, &lfs_used);
+    size_t free_bytes = (lfs_used < lfs_total) ? (lfs_total - lfs_used) : 0;
+    int storage_sec = (int)(free_bytes / AUDIO_BYTES_PER_SEC);
+    rec_max_sec = (storage_sec < AUDIO_MAX_DURATION_SEC) ? storage_sec : AUDIO_MAX_DURATION_SEC;
+
     rec_file = fopen(rec_filepath, "wb");
     if (!rec_file) {
         ESP_LOGE(TAG, "Failed to open %s for writing", rec_filepath);
@@ -255,6 +263,10 @@ bool audio_is_recording(void) {
 int audio_get_recording_elapsed(void) {
     if (!recording) return 0;
     return (int)((esp_timer_get_time() - rec_start_us) / 1000000);
+}
+
+int audio_get_recording_max_sec(void) {
+    return rec_max_sec;
 }
 
 static void playback_task(void *arg) {

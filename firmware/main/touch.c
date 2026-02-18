@@ -79,7 +79,7 @@ void touch_poll(void) {
 
     // Update recording display while held
     if (btn_record_held && audio_is_recording()) {
-        display_update_recording(audio_get_recording_elapsed(), AUDIO_MAX_DURATION_SEC);
+        display_update_recording(audio_get_recording_elapsed(), audio_get_recording_max_sec());
     }
 
     // --- Deferred queue badge update ---

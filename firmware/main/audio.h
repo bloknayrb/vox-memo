@@ -32,6 +32,7 @@
 // Recording limits
 #define AUDIO_MAX_DURATION_SEC  120
 #define AUDIO_MIN_DURATION_BYTES (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * (AUDIO_BITS / 8) * 1)  // 1 second
+#define AUDIO_BYTES_PER_SEC     (AUDIO_SAMPLE_RATE * (AUDIO_BITS / 8) * AUDIO_CHANNELS)
 
 // Memo storage path on LittleFS
 #define MEMO_BASE_PATH      "/memos"
@@ -82,6 +83,12 @@ int audio_get_memo_count(void);
  * Get elapsed recording time in seconds (0 if not recording).
  */
 int audio_get_recording_elapsed(void);
+
+/**
+ * Get the max recording duration for the current/last recording in seconds.
+ * Reflects available storage, capped at AUDIO_MAX_DURATION_SEC.
+ */
+int audio_get_recording_max_sec(void);
 
 /**
  * Get a list of memo filenames. Caller must free the returned array
