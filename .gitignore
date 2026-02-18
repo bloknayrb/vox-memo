@@ -8,7 +8,6 @@ firmware/managed_components/
 server/.venv/
 server/__pycache__/
 server/*.pyc
-server/uv.lock
 
 # IDE
 .vscode/
@@ -25,6 +24,7 @@ Thumbs.db
 
 # Secrets
 .env
+server/.env
 firmware/main/secrets.h
 
 # Plans

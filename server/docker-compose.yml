@@ -1,0 +1,12 @@
+services:
+  vox-memo:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - "${OBSIDIAN_INBOX_HOST}:/obsidian/inbox"
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OBSIDIAN_INBOX: "/obsidian/inbox"
+      DEBUG: "${DEBUG:-}"
