@@ -141,3 +141,24 @@ esp_err_t es8311_mute_dac(bool mute)
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
     return es_write(REG_DAC_VOL, mute ? 0xC0 : 0x00);
 }
+
+esp_err_t es8311_suspend(void)
+{
+    if (!dev_handle) return ESP_ERR_INVALID_STATE;
+    ESP_RETURN_ON_ERROR(es_write(REG_SYS_14, 0x00), TAG, "charge pump suspend failed");
+    ESP_RETURN_ON_ERROR(es_write(REG_ADC_15, 0xB8), TAG, "ADC suspend failed");
+    ESP_RETURN_ON_ERROR(es_write(REG_DAC_31, 0x60), TAG, "DAC suspend failed");
+    ESP_LOGI(TAG, "ES8311 suspended");
+    return ESP_OK;
+}
+
+esp_err_t es8311_resume(void)
+{
+    if (!dev_handle) return ESP_ERR_INVALID_STATE;
+    ESP_RETURN_ON_ERROR(es_write(REG_SYS_14, 0xBF), TAG, "charge pump resume failed");
+    ESP_RETURN_ON_ERROR(es_write(REG_ADC_15, 0x38), TAG, "ADC resume failed");
+    ESP_RETURN_ON_ERROR(es_write(REG_DAC_31, 0x00), TAG, "DAC resume failed");
+    vTaskDelay(pdMS_TO_TICKS(10));  // Analog settling
+    ESP_LOGI(TAG, "ES8311 resumed");
+    return ESP_OK;
+}

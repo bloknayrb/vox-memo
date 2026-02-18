@@ -39,6 +39,18 @@ esp_err_t network_check_server(void);
 const char *network_get_ssid(void);
 
 /**
+ * Suspend WiFi to save power (queue empty, nothing to sync).
+ * Calls esp_wifi_stop() — reconnects automatically via network_wake().
+ */
+void network_suspend(void);
+
+/**
+ * Wake WiFi after suspend (new memo recorded, needs sync).
+ * No-op if WiFi is already active.
+ */
+void network_wake(void);
+
+/**
  * Background sync task — call from a FreeRTOS task.
  * Continuously checks for queued memos and uploads when on Wi-Fi.
  */

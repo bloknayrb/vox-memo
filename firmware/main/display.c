@@ -12,6 +12,8 @@
 #include "esp_lcd_sh8601.h"
 #include "esp_lcd_touch_ft5x06.h"
 #include "esp_lvgl_port.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/i2c_master.h"
 #include "lvgl.h"
@@ -755,14 +757,18 @@ void *display_get_i2c_handle(void) {
 
 void display_sleep(void) {
     if (!display_ready || display_sleeping) return;
-    esp_lcd_panel_disp_on_off(panel_handle, false);
+    esp_lcd_panel_disp_on_off(panel_handle, false);       // DISPOFF
+    esp_lcd_panel_io_tx_param(io_handle, 0x10, NULL, 0);  // SLPIN
+    vTaskDelay(pdMS_TO_TICKS(120));  // SH8601 spec: >=120ms after SLPIN
     display_sleeping = true;
     ESP_LOGI(TAG, "Display sleeping");
 }
 
 void display_wake(void) {
     if (!display_ready || !display_sleeping) return;
-    esp_lcd_panel_disp_on_off(panel_handle, true);
+    esp_lcd_panel_io_tx_param(io_handle, 0x11, NULL, 0);  // SLPOUT
+    vTaskDelay(pdMS_TO_TICKS(120));  // Wait for oscillator stabilize
+    esp_lcd_panel_disp_on_off(panel_handle, true);         // DISPON
     display_set_brightness(0xFF);
     display_sleeping = false;
     display_dimmed = false;

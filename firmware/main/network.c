@@ -54,6 +54,7 @@ typedef enum {
     WIFI_STATE_IDLE,
     WIFI_STATE_CONNECTING,
     WIFI_STATE_TRANSITIONING,  // stop/start cycle in progress
+    WIFI_STATE_SUSPENDED,      // WiFi off to save power (queue empty)
 } wifi_state_t;
 
 static wifi_state_t wifi_state = WIFI_STATE_IDLE;
@@ -95,8 +96,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT);
         display_update_wifi(false, NULL);
 
-        if (wifi_state == WIFI_STATE_TRANSITIONING) {
-            // Expected disconnect during SSID switch — don't interfere
+        if (wifi_state == WIFI_STATE_TRANSITIONING || wifi_state == WIFI_STATE_SUSPENDED) {
+            // Expected disconnect during SSID switch or power-save suspend
             return;
         }
 
@@ -115,6 +116,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                  wifi_entries[wifi_entry_idx].ssid, IP2STR(&event->ip_info.ip));
         wifi_state = WIFI_STATE_IDLE;
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
+        esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
         display_update_wifi(true, wifi_entries[wifi_entry_idx].ssid);
 
         // Set active server IP from the current WiFi entry
@@ -153,6 +155,22 @@ static void try_next_entry(void) {
 
     esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
     esp_wifi_start();  // triggers WIFI_EVENT_STA_START → esp_wifi_connect()
+}
+
+void network_suspend(void) {
+    if (wifi_state == WIFI_STATE_SUSPENDED) return;
+    wifi_state = WIFI_STATE_SUSPENDED;
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+    display_update_wifi(false, NULL);
+    ESP_LOGI(TAG, "WiFi suspended (queue empty)");
+}
+
+void network_wake(void) {
+    if (wifi_state != WIFI_STATE_SUSPENDED) return;
+    wifi_state = WIFI_STATE_CONNECTING;
+    esp_wifi_start();  // triggers STA_START handler → esp_wifi_connect()
+    ESP_LOGI(TAG, "WiFi waking (memos queued)");
 }
 
 esp_err_t network_init(void) {
@@ -368,6 +386,11 @@ void network_sync_task(void *arg) {
         if (!network_is_connected()) continue;
         if (usb_sync_in_progress()) continue;
 
+        if (audio_get_memo_count() == 0) {
+            network_suspend();
+            continue;
+        }
+
         // Find server before attempting upload
         if (network_check_server() != ESP_OK) continue;
 
@@ -416,6 +439,11 @@ void network_sync_task(void *arg) {
         // If nothing synced at all, show failure on the full screen
         if (synced == 0) {
             display_show_sync_result("Sync failed", false);
+        }
+
+        // Suspend WiFi if queue is now empty after syncing
+        if (audio_get_memo_count() == 0) {
+            network_suspend();
         }
     }
 }

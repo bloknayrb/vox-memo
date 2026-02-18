@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "display.h"
 #include "es8311.h"
+#include "network.h"
 
 #include <dirent.h>
 #include "esp_littlefs.h"
@@ -120,6 +121,10 @@ static void recording_task(void *arg) {
     }
 
     i2s_channel_disable(rx_chan);
+    es8311_suspend();
+    if (!last_rec_discarded) {
+        network_wake();
+    }
     xSemaphoreGive(rec_done_sem);
     vTaskDelete(NULL);
 }
@@ -173,6 +178,7 @@ esp_err_t audio_init(void) {
         esp_err_t codec_ret = es8311_init(i2c_bus, ES8311_MIC_GAIN_24DB);
         if (codec_ret == ESP_OK) {
             es8311_enable_dac();  // Enable DAC path for future playback
+            es8311_suspend();     // Start asleep — resume on record/play
             ESP_LOGI(TAG, "ES8311 codec initialized");
         } else {
             ESP_LOGW(TAG, "ES8311 init failed (%s) — audio may not work",
@@ -219,7 +225,15 @@ esp_err_t audio_start_recording(void) {
     rec_bytes_written = 0;
     write_wav_header(rec_file, 0);
 
-    // Enable I2S receive
+    // Resume codec and enable I2S receive
+    esp_err_t codec_err = es8311_resume();
+    if (codec_err != ESP_OK) {
+        ESP_LOGE(TAG, "Codec resume failed, aborting recording");
+        fclose(rec_file);
+        rec_file = NULL;
+        remove(rec_filepath);
+        return codec_err;
+    }
     ESP_ERROR_CHECK(i2s_channel_enable(rx_chan));
 
     recording = true;
@@ -304,6 +318,7 @@ static void playback_task(void *arg) {
     i2s_channel_disable(tx_chan);
     es8311_mute_dac(true);  // Mute before PA off to avoid pop
     gpio_set_level(AUDIO_PA_CTRL, 0);
+    es8311_suspend();
     playing = false;
     stop_playback = false;
 
@@ -321,7 +336,12 @@ esp_err_t audio_play(const char *filename) {
     strncpy(playback_path, filename, sizeof(playback_path) - 1);
     playback_path[sizeof(playback_path) - 1] = '\0';
 
-    // Unmute DAC and enable speaker amplifier with settling time
+    // Resume codec, unmute DAC and enable speaker amplifier with settling time
+    esp_err_t codec_err = es8311_resume();
+    if (codec_err != ESP_OK) {
+        ESP_LOGE(TAG, "Codec resume failed, aborting playback");
+        return codec_err;
+    }
     es8311_mute_dac(false);
     gpio_set_level(AUDIO_PA_CTRL, 1);
     vTaskDelay(pdMS_TO_TICKS(20));  // PA settling time

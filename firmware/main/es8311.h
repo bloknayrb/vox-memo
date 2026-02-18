@@ -39,3 +39,15 @@ esp_err_t es8311_enable_dac(void);
  * Mute/unmute the DAC output.
  */
 esp_err_t es8311_mute_dac(bool mute);
+
+/**
+ * Power down ADC, DAC, and charge pump to save ~3-5 mA.
+ * Register state (clocks, bias, LDO) is preserved for fast resume.
+ */
+esp_err_t es8311_suspend(void);
+
+/**
+ * Restore ADC, DAC, and charge pump from suspend.
+ * Returns error if any register write fails (avoids silent ADC/DAC bugs).
+ */
+esp_err_t es8311_resume(void);
