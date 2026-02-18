@@ -9,7 +9,7 @@ CLEANUP_MODEL = "gpt-4o-mini"
 
 # Output
 OBSIDIAN_INBOX = Path(os.environ.get("OBSIDIAN_INBOX", "~/Obsidian/vault/Inbox")).expanduser()
-ARCHIVE_AUDIO = False  # keep WAV files alongside markdown
+ARCHIVE_AUDIO = True  # keep WAV files alongside markdown
 
 # Server
 HOST = "0.0.0.0"

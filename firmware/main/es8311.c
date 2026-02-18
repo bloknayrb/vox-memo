@@ -113,7 +113,7 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
     es_write(REG_SYS_14, 0x1A);  /* Charge pump on */
 
     /* ADC path: power on, PGA on, MICBIAS on, single-ended mic */
-    es_write(REG_ADC_15, 0xB8);
+    es_write(REG_ADC_15, 0x38);  /* 0xB8 had bit 7 set — ADC PDN (active-low power-down) */
     es_write(REG_ADC_16, 0x80);  /* HPF enabled (DC removal) */
     es_write(REG_ADC_17, 0x00);  /* Automute disabled */
     es_write(REG_ADC_18, 0x02);  /* EQ bypass (flat response) */

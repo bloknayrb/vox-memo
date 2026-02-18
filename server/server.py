@@ -29,6 +29,14 @@ def get_openai() -> OpenAI:
 
 def transcribe(audio_path: Path) -> str:
     """Transcribe WAV file using OpenAI Whisper API. Raises openai.OpenAIError on failure."""
+    import wave, array, math
+    with wave.open(str(audio_path)) as wf:
+        pcm = wf.readframes(wf.getnframes())
+        samples = array.array('h', pcm)
+        rms = math.sqrt(sum(s*s for s in samples) / len(samples)) if samples else 0
+        duration_s = wf.getnframes() / wf.getframerate()
+    print(f"[audio] {duration_s:.1f}s  RMS={rms:.0f}  bytes={len(pcm)}")
+
     client = get_openai()
     with open(audio_path, "rb") as f:
         result = client.audio.transcriptions.create(model="whisper-1", file=f, language="en")
