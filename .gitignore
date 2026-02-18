@@ -1,0 +1,31 @@
+# ESP-IDF build artifacts
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+
+# Python
+server/.venv/
+server/__pycache__/
+server/*.pyc
+server/uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio test files
+*.wav
+
+# Secrets
+.env
+firmware/main/secrets.h
+
+# Plans
+PLAN-*.md

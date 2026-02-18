@@ -1,0 +1,11 @@
+[project]
+name = "vox-memo-server"
+version = "0.1.0"
+description = "Voice memo capture server — receives audio from ESP32, transcribes, saves to Obsidian"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "openai>=1.0.0",
+    "python-multipart>=0.0.18",
+]

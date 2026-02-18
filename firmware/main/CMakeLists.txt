@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "audio.c"
+        "display.c"
+        "es8311.c"
+        "touch.c"
+        "network.c"
+        "imu.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        driver
+        esp_wifi
+        esp_http_client
+        esp_timer
+        nvs_flash
+        joltwallet__littlefs
+        esp_lcd
+        esp_lcd_sh8601
+        lvgl__lvgl
+        espressif__esp_lvgl_port
+        espressif__esp_lcd_touch_ft5x06
+)

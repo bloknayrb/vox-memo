@@ -1,0 +1,11 @@
+## IDF Component Manager manifest
+## Pulls managed components from https://components.espressif.com
+
+dependencies:
+  idf: '>=5.3'
+
+  ## LVGL graphics library (esp_littlefs is bundled with ESP-IDF 5.x, no entry needed)
+  lvgl/lvgl: ^9.0.0
+  joltwallet/littlefs: '*'
+  espressif/esp_lvgl_port: ^2.0.0
+  espressif/esp_lcd_touch_ft5x06: '*'
