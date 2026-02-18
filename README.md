@@ -17,15 +17,18 @@ Capture is fully offline. All intelligence runs on the PC.
 ```
 firmware/       ESP32-C6 firmware (ESP-IDF + LVGL)
   main/
-    main.c      Entry point, task spawning, main loop
-    audio.c/h   I2S capture from ES8311, LittleFS storage
-    display.c/h LVGL screens on SH8601 AMOLED
-    touch.c/h   Button + touch input handling
-    network.c/h Wi-Fi + HTTP upload to PC server
-    imu.c/h     QMI8658 wake/sleep detection
+    main.c        Entry point, task spawning, main loop
+    audio.c/h     I2S capture from ES8311, LittleFS storage
+    display.c/h   LVGL screens on SH8601 AMOLED
+    touch.c/h     Button + touch input handling
+    network.c/h   Wi-Fi + HTTP upload to PC server
+    axp2101.c/h   PMIC — battery fuel gauge, charging status
+    usb_sync.c/h  USB serial memo transfer (offline sync)
 
 server/              Python backend
   server.py          FastAPI — receives audio, transcribes, saves markdown
+  usb_sync.py        USB serial bridge (serial → HTTP, for offline sync)
+  notify_watcher.py  Desktop toast notifications on new notes (Windows)
   config.py          Settings (paths, models, archive toggle)
   Dockerfile         Container build
   docker-compose.yml Compose config with Obsidian volume mount
@@ -69,6 +72,7 @@ git clone https://github.com/waveshareteam/Waveshare-ESP32-components ~/GitHub/W
 # Configure credentials
 cp firmware/main/secrets.h.example firmware/main/secrets.h
 # Edit secrets.h: fill in SSID, password, server IP
+# Optionally uncomment the hotspot block for multi-network fallback
 
 # Build and flash
 cd firmware
@@ -77,6 +81,15 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 
+## Features
+
+- **Idle screen** — clock, battery %, Wi-Fi SSID (shows active network name), queued memo count
+- **Multi-network fallback** — configure home Wi-Fi + hotspot in `secrets.h`; device cycles automatically
+- **Storage-aware recording** — max duration shrinks as flash fills up (capped at 120s)
+- **USB sync** — transfer memos over USB serial when Wi-Fi isn't available (`server/usb_sync.py`)
+- **Desktop notifications** — toast alert on new Obsidian note (`server/notify_watcher.py`)
+- **Auto-discard** — recordings under 1s are silently dropped (accidental taps)
+
 ## Status
 
-Fully functional. All phases complete.
+Fully functional.
