@@ -18,9 +18,8 @@
 #define AUDIO_I2S_DOUT      GPIO_NUM_23   // Speaker output
 #define AUDIO_I2S_DIN       GPIO_NUM_21   // Mic input
 
-// I2C pins for ES8311 codec control
-#define AUDIO_I2C_SDA       GPIO_NUM_7
-#define AUDIO_I2C_SCL       GPIO_NUM_8
+// I2C bus is shared — pins defined in display.h (BSP_I2C_SDA/SCL)
+// ES8311 uses display_get_i2c_handle() to access the bus
 
 // Speaker amplifier enable (PA control) — set HIGH to enable
 // GPIO6 matches C6-2.06 BSP (GPIO0 is QSPI PCLK for display)
@@ -32,6 +31,7 @@
 
 // Recording limits
 #define AUDIO_MAX_DURATION_SEC  120
+#define AUDIO_MIN_DURATION_BYTES (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * (AUDIO_BITS / 8) * 1)  // 1 second
 
 // Memo storage path on LittleFS
 #define MEMO_BASE_PATH      "/memos"
@@ -52,8 +52,10 @@ esp_err_t audio_start_recording(void);
 
 /**
  * Stop the current recording. Finalizes WAV header with actual byte count.
+ * Recordings shorter than AUDIO_MIN_DURATION_BYTES are auto-discarded.
+ * @param was_discarded  If non-NULL, set to true when recording was too short and discarded.
  */
-esp_err_t audio_stop_recording(void);
+esp_err_t audio_stop_recording(bool *was_discarded);
 
 /**
  * Returns true if currently recording.

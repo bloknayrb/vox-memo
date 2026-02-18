@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "display.h"
+#include "usb_sync.h"
 
 #include "esp_event.h"
 #include "esp_http_client.h"
@@ -300,6 +301,7 @@ void network_sync_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(SYNC_INTERVAL_MS));
 
         if (!network_is_connected()) continue;
+        if (usb_sync_in_progress()) continue;
 
         // Find server before attempting upload
         if (network_check_server() != ESP_OK) continue;

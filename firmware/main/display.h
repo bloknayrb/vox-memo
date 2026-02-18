@@ -3,6 +3,7 @@
 #include "esp_err.h"
 #include "driver/gpio.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 // Waveshare ESP32-C6-Touch-AMOLED-1.8 — SH8601 QSPI display
 // Resolution: 368 x 448
@@ -99,12 +100,19 @@ void *display_get_i2c_handle(void);
  *   advance the inactivity counter and sleep after DISPLAY_SLEEP_TIMEOUT_SEC.
  */
 #define DISPLAY_SLEEP_TIMEOUT_SEC  30
+#define DISPLAY_DIM_TIMEOUT_SEC   60  // Dim after this many seconds on USB power
 
 void display_sleep(void);
 void display_wake(void);
 bool display_is_sleeping(void);
 void display_note_activity(void);
 void display_tick_inactivity(void);
+
+/**
+ * Set display brightness (0x00=off, 0xFF=max).
+ * Used for dim/wake transitions when on USB power.
+ */
+void display_set_brightness(uint8_t level);
 
 // Note: LVGL tick and task handling are managed by esp_lvgl_port.
 // No manual display_tick() or display_task_handler() needed.

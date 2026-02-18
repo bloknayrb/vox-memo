@@ -35,6 +35,7 @@ static FILE *rec_file = NULL;
 static int64_t rec_start_us = 0;
 static uint32_t rec_bytes_written = 0;
 static char rec_filepath[64] = {0};
+static volatile bool last_rec_discarded = false;
 
 // WAV header for 16kHz 16-bit mono PCM
 typedef struct __attribute__((packed)) {
@@ -97,12 +98,23 @@ static void recording_task(void *arg) {
         }
     }
 
-    // Finalize WAV header with actual size
+    // Finalize: discard if too short, otherwise write WAV header
     if (rec_file) {
-        write_wav_header(rec_file, rec_bytes_written);
-        fclose(rec_file);
-        rec_file = NULL;
-        ESP_LOGI(TAG, "Recording saved: %s (%lu bytes)", rec_filepath, (unsigned long)rec_bytes_written);
+        if (rec_bytes_written < AUDIO_MIN_DURATION_BYTES) {
+            fclose(rec_file);
+            rec_file = NULL;
+            remove(rec_filepath);
+            last_rec_discarded = true;
+            ESP_LOGW(TAG, "Recording discarded (too short): %s (%lu bytes)",
+                     rec_filepath, (unsigned long)rec_bytes_written);
+        } else {
+            write_wav_header(rec_file, rec_bytes_written);
+            fclose(rec_file);
+            rec_file = NULL;
+            last_rec_discarded = false;
+            ESP_LOGI(TAG, "Recording saved: %s (%lu bytes)",
+                     rec_filepath, (unsigned long)rec_bytes_written);
+        }
     }
 
     i2s_channel_disable(rx_chan);
@@ -215,14 +227,24 @@ esp_err_t audio_start_recording(void) {
     return ESP_OK;
 }
 
-esp_err_t audio_stop_recording(void) {
+esp_err_t audio_stop_recording(bool *was_discarded) {
     if (!recording) {
+        // Max-duration auto-stop may have already set recording=false.
+        // Try to consume the semaphore in case the task just finished.
+        if (xSemaphoreTake(rec_done_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (was_discarded) *was_discarded = last_rec_discarded;
+            ESP_LOGI(TAG, "Recording already stopped%s", last_rec_discarded ? " (discarded)" : "");
+            return ESP_OK;
+        }
         return ESP_ERR_INVALID_STATE;
     }
     recording = false;
     // Wait for task to finalize WAV header and close file before returning
     xSemaphoreTake(rec_done_sem, pdMS_TO_TICKS(5000));
-    ESP_LOGI(TAG, "Recording stopped");
+    if (was_discarded) {
+        *was_discarded = last_rec_discarded;
+    }
+    ESP_LOGI(TAG, "Recording stopped%s", last_rec_discarded ? " (discarded)" : "");
     return ESP_OK;
 }
 
@@ -268,6 +290,7 @@ static void playback_task(void *arg) {
 
     fclose(f);
     i2s_channel_disable(tx_chan);
+    es8311_mute_dac(true);  // Mute before PA off to avoid pop
     gpio_set_level(AUDIO_PA_CTRL, 0);
     playing = false;
     stop_playback = false;
@@ -286,8 +309,10 @@ esp_err_t audio_play(const char *filename) {
     strncpy(playback_path, filename, sizeof(playback_path) - 1);
     playback_path[sizeof(playback_path) - 1] = '\0';
 
-    // Enable speaker amplifier
+    // Unmute DAC and enable speaker amplifier with settling time
+    es8311_mute_dac(false);
     gpio_set_level(AUDIO_PA_CTRL, 1);
+    vTaskDelay(pdMS_TO_TICKS(20));  // PA settling time
 
     // Enable I2S transmit channel
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));

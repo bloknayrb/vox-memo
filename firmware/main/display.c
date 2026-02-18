@@ -1,5 +1,6 @@
 #include "display.h"
 #include "audio.h"
+#include "axp2101.h"
 
 #include <string.h>
 #include <sys/stat.h>
@@ -20,8 +21,9 @@ static const char *TAG = "display";
 // Set to true only after hardware is initialized and LVGL screens are created.
 static bool display_ready = false;
 
-// Screen sleep state
+// Screen sleep/dim state
 static bool display_sleeping = false;
+static bool display_dimmed = false;
 static int inactivity_seconds = 0;
 
 // Hardware handles
@@ -59,6 +61,10 @@ static lv_obj_t *btn_delete = NULL;
 static lv_obj_t *lbl_queue_empty = NULL;
 static char selected_memo_path[280] = {0};
 static lv_obj_t *selected_btn = NULL;
+
+// Delete confirmation state
+static bool delete_confirming = false;
+static lv_timer_t *delete_confirm_timer = NULL;
 
 // Style for list items and action buttons
 static lv_style_t style_list_btn;
@@ -136,10 +142,15 @@ static void init_styles(void) {
     lv_style_set_pad_all(&style_action_btn, 10);
 }
 
+// Forward declaration — defined after memo_item_delete_cb
+static void reset_delete_confirm(void);
+
 // --- Swipe gesture handler ---
 static void gesture_event_cb(lv_event_t *e) {
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
     lv_obj_t *scr = (lv_obj_t *)lv_event_get_current_target(e);
+
+    reset_delete_confirm();
 
     if (scr == screens[SCREEN_IDLE] && dir == LV_DIR_LEFT) {
         display_refresh_memo_list();
@@ -188,10 +199,32 @@ static void memo_item_delete_cb(lv_event_t *e) {
     free(lv_event_get_user_data(e));
 }
 
+// --- Delete confirmation helpers ---
+static void reset_delete_confirm(void) {
+    if (delete_confirm_timer) {
+        lv_timer_delete(delete_confirm_timer);
+        delete_confirm_timer = NULL;
+    }
+    if (delete_confirming && btn_delete) {
+        lv_obj_t *lbl = lv_obj_get_child(btn_delete, 0);
+        if (lbl) lv_label_set_text(lbl, "Delete");
+        lv_obj_set_style_bg_color(btn_delete, lv_color_hex(0x2A4A3A), 0);
+    }
+    delete_confirming = false;
+}
+
+static void delete_confirm_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    delete_confirm_timer = NULL;
+    reset_delete_confirm();
+}
+
 // --- Memo list item tap handler ---
 static void memo_item_click_cb(lv_event_t *e) {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
     const char *path = (const char *)lv_event_get_user_data(e);
+
+    reset_delete_confirm();
 
     if (selected_btn == btn) {
         // Deselect
@@ -225,16 +258,32 @@ static void play_btn_cb(lv_event_t *e) {
     if (lbl) lv_label_set_text(lbl, "Playing...");
 }
 
-// --- Delete button handler ---
+// --- Delete button handler (two-tap confirmation) ---
 static void delete_btn_cb(lv_event_t *e) {
     (void)e;
     if (selected_memo_path[0] == '\0') return;
+
+    if (!delete_confirming) {
+        // First tap — enter confirmation state
+        delete_confirming = true;
+        lv_obj_t *lbl = lv_obj_get_child(btn_delete, 0);
+        if (lbl) lv_label_set_text(lbl, "Confirm?");
+        lv_obj_set_style_bg_color(btn_delete, lv_color_hex(0x994040), 0);
+        // Auto-reset after 2 seconds
+        if (delete_confirm_timer) lv_timer_delete(delete_confirm_timer);
+        delete_confirm_timer = lv_timer_create(delete_confirm_timer_cb, 2000, NULL);
+        lv_timer_set_repeat_count(delete_confirm_timer, 1);
+        return;
+    }
+
+    // Second tap — execute delete
+    reset_delete_confirm();
+    audio_stop_playback();  // stop playback if active on this memo
     audio_delete_memo(selected_memo_path);
     selected_memo_path[0] = '\0';
     selected_btn = NULL;
     lv_obj_add_flag(btn_play, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(btn_delete, LV_OBJ_FLAG_HIDDEN);
-    // Refresh the list and update idle badge
     display_refresh_memo_list();
     display_update_queue_badge(audio_get_memo_count());
 }
@@ -625,6 +674,8 @@ void display_refresh_memo_list(void) {
     if (!display_ready || !lst_memos) return;
     lvgl_port_lock(0);
 
+    reset_delete_confirm();
+
     // Clear existing list children
     lv_obj_clean(lst_memos);
     selected_btn = NULL;
@@ -693,7 +744,9 @@ void display_sleep(void) {
 void display_wake(void) {
     if (!display_ready || !display_sleeping) return;
     esp_lcd_panel_disp_on_off(panel_handle, true);
+    display_set_brightness(0xFF);
     display_sleeping = false;
+    display_dimmed = false;
     inactivity_seconds = 0;
     // Force a full redraw so the screen content is restored
     lvgl_port_lock(0);
@@ -706,17 +759,39 @@ bool display_is_sleeping(void) {
     return display_sleeping;
 }
 
+void display_set_brightness(uint8_t level) {
+    if (!panel_handle) return;
+    // SH8601 brightness command 0x51 — set via panel IO
+    uint8_t data = level;
+    esp_lcd_panel_io_tx_param(io_handle, 0x51, &data, 1);
+}
+
 void display_note_activity(void) {
     inactivity_seconds = 0;
     if (display_sleeping) {
         display_wake();
+    } else if (display_dimmed) {
+        display_dimmed = false;
+        display_set_brightness(0xFF);
     }
 }
 
 void display_tick_inactivity(void) {
     if (display_sleeping) return;
     inactivity_seconds++;
-    if (inactivity_seconds >= DISPLAY_SLEEP_TIMEOUT_SEC) {
-        display_sleep();
+
+    bool on_usb = axp2101_is_vbus_present();
+
+    if (on_usb) {
+        // On USB: dim after DIM_TIMEOUT, never sleep
+        if (!display_dimmed && inactivity_seconds >= DISPLAY_DIM_TIMEOUT_SEC) {
+            display_dimmed = true;
+            display_set_brightness(0x4D);  // ~30% brightness
+        }
+    } else {
+        // On battery: normal sleep timeout
+        if (inactivity_seconds >= DISPLAY_SLEEP_TIMEOUT_SEC) {
+            display_sleep();
+        }
     }
 }

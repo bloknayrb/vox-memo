@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "display.h"
+#include "usb_sync.h"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -46,20 +47,33 @@ void touch_poll(void) {
         // Button just pressed — wake display or start recording
         display_note_activity();
         btn_record_held = true;
-        if (!audio_is_recording() && !display_is_sleeping()) {
+        if (!audio_is_recording() && !display_is_sleeping() && !usb_sync_in_progress()) {
             ESP_LOGI(TAG, "Record button pressed — starting recording");
             audio_start_recording();
             display_show_screen(SCREEN_RECORDING);
         }
     } else if (!pressed && btn_record_held) {
-        // Button just released — stop recording
+        // Button just released — stop recording if still active
         btn_record_held = false;
         if (audio_is_recording()) {
             ESP_LOGI(TAG, "Record button released — stopping recording");
-            audio_stop_recording();
+            bool discarded = false;
+            audio_stop_recording(&discarded);
             display_show_screen(SCREEN_IDLE);
-            // Defer badge update 200ms so file is fully closed before counting
-            badge_update_at_us = esp_timer_get_time() + 200000;
+            if (!discarded) {
+                badge_update_at_us = esp_timer_get_time() + 200000;
+            }
+        } else {
+            // Max-duration auto-stop already fired while button was held.
+            // recording_task set recording=false, so audio_is_recording() is
+            // already false — but we still need to wait for finalization and
+            // update the badge.
+            bool discarded = false;
+            audio_stop_recording(&discarded);
+            display_show_screen(SCREEN_IDLE);
+            if (!discarded) {
+                badge_update_at_us = esp_timer_get_time() + 200000;
+            }
         }
     }
 

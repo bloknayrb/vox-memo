@@ -128,7 +128,7 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
 esp_err_t es8311_enable_dac(void)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
-    es_write(REG_DAC_31, 0x60);  /* DAC left on */
+    es_write(REG_DAC_31, 0x00);  /* DAC power on (0x60 mutes DSM+DEM!) */
     es_write(REG_DAC_VOL, 0x00); /* 0 dB */
     es_write(REG_DAC_35, 0x20);  /* Moderate ramp (pop suppression) */
     es_write(REG_SYS_14, 0xBF);  /* Full charge pump */

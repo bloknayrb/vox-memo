@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <time.h>
 
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_littlefs.h"
 #include "nvs_flash.h"
@@ -15,10 +16,12 @@
 #include "freertos/task.h"
 
 #include "audio.h"
+#include "axp2101.h"
 #include "display.h"
 #include "imu.h"
 #include "network.h"
 #include "touch.h"
+#include "usb_sync.h"
 
 static const char *TAG = "vox_memo";
 
@@ -59,6 +62,16 @@ void app_main(void) {
 
     // Initialize subsystems
     ESP_ERROR_CHECK(display_init());
+
+    // Initialize AXP2101 PMIC (battery + VBUS monitoring)
+    i2c_master_bus_handle_t i2c_bus = (i2c_master_bus_handle_t)display_get_i2c_handle();
+    if (i2c_bus) {
+        esp_err_t axp_ret = axp2101_init(i2c_bus);
+        if (axp_ret != ESP_OK) {
+            ESP_LOGW(TAG, "AXP2101 init failed — battery monitoring unavailable");
+        }
+    }
+
     ESP_ERROR_CHECK(audio_init());
     ESP_ERROR_CHECK(touch_init());
     ESP_ERROR_CHECK(imu_init());
@@ -69,6 +82,12 @@ void app_main(void) {
     // Set timezone to US Eastern (EST5EDT)
     setenv("TZ", "EST5EDT,M3.2.0,M11.1.0", 1);
     tzset();
+
+    // Initialize USB sync (memo transfer via USB cable)
+    esp_err_t usb_ret = usb_sync_init();
+    if (usb_ret != ESP_OK) {
+        ESP_LOGW(TAG, "USB sync init failed — USB transfer unavailable");
+    }
 
     // Start Wi-Fi (non-blocking — connects in background)
     ESP_ERROR_CHECK(network_init());
@@ -85,6 +104,7 @@ void app_main(void) {
 
     // Main loop: LVGL rendering + input polling + status updates
     int loop_count = 0;
+    bool prev_vbus = false;
     while (1) {
         // Poll inputs (buttons + touch)
         touch_poll();
@@ -100,6 +120,21 @@ void app_main(void) {
 
             // Update Wi-Fi indicator
             display_update_wifi(network_is_connected());
+
+            // Update battery every ~10 seconds
+            if (loop_count % 1000 == 0) {
+                int batt = axp2101_get_battery_percent();
+                if (batt >= 0) {
+                    display_update_battery(batt);
+                }
+            }
+
+            // Detect USB plug-in → wake display
+            bool cur_vbus = axp2101_is_vbus_present();
+            if (cur_vbus && !prev_vbus) {
+                display_note_activity();
+            }
+            prev_vbus = cur_vbus;
 
             // Advance inactivity timer (skip while recording to keep screen on)
             if (!audio_is_recording()) {
