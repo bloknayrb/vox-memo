@@ -121,6 +121,7 @@ static void handle_delete(const char *filename)
 
     if (remove(path) == 0) {
         usb_write_str("OK\n");
+        display_update_queue_badge(audio_get_memo_count());
         ESP_LOGI(TAG, "Deleted via USB: %s", filename);
     } else {
         usb_write_str("ERR Delete failed\n");

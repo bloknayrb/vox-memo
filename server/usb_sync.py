@@ -27,8 +27,12 @@ def find_esp32_port() -> str | None:
     """Auto-detect the ESP32-C6 USB Serial/JTAG port."""
     for port in serial.tools.list_ports.comports():
         desc = (port.description or "").lower()
-        # ESP32-C6 USB Serial/JTAG shows up as "USB JTAG/serial debug unit"
-        if "jtag" in desc or "esp" in desc:
+        hwid = (port.hwid or "").lower()
+        # ESP32-C6 USB Serial/JTAG shows up as:
+        #   "USB JTAG/serial debug unit" (some drivers)
+        #   "USB Serial Device" (generic Windows CDC driver)
+        # Also match by USB VID:PID — Espressif = 303A:1001
+        if "jtag" in desc or "esp" in desc or "303a" in hwid:
             return port.device
     return None
 
