@@ -82,10 +82,10 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
     }
     ESP_LOGI(TAG, "ES8311 found (id=0x%02X)", chip_id);
 
-    /* Soft reset */
-    es_write(REG_RESET, 0x1F);
+    /* Soft reset — critical: fail fast if I2C is broken */
+    ESP_RETURN_ON_ERROR(es_write(REG_RESET, 0x1F), TAG, "Soft reset failed");
     vTaskDelay(pdMS_TO_TICKS(20));
-    es_write(REG_RESET, 0x00);
+    ESP_RETURN_ON_ERROR(es_write(REG_RESET, 0x00), TAG, "Soft reset release failed");
 
     /* Clock manager — MCLK=4.096MHz from pin, BCLK div=8, OSR for 16kHz */
     es_write(REG_CLK1, 0x00);  /* MCLK from pin, pre-div=1 */
@@ -97,12 +97,12 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
     es_write(REG_CLK7, 0x7F);  /* OSR config for 16kHz (from esp-adf table) */
     es_write(REG_CLK8, 0x00);  /* ADC OSR = 256x (best SNR) */
 
-    /* I2S format: Philips standard, 16-bit */
-    es_write(REG_SDPIN,  0x0C);  /* DAC input: I2S 16-bit */
-    es_write(REG_SDPOUT, 0x0C);  /* ADC output: I2S 16-bit */
+    /* I2S format: Philips standard, 16-bit — critical for correct audio capture */
+    ESP_RETURN_ON_ERROR(es_write(REG_SDPIN,  0x0C), TAG, "I2S DAC format failed");
+    ESP_RETURN_ON_ERROR(es_write(REG_SDPOUT, 0x0C), TAG, "I2S ADC format failed");
 
-    /* System power-up */
-    es_write(REG_SYS_D,  0x01);  /* Power on, fast-charge VMID */
+    /* System power-up — critical */
+    ESP_RETURN_ON_ERROR(es_write(REG_SYS_D,  0x01), TAG, "Power-up failed");
     vTaskDelay(pdMS_TO_TICKS(10));
     es_write(REG_SYS_E,  0x0A);  /* Bias on */
     es_write(REG_SYS_F,  0x00);  /* 3.3V reference */

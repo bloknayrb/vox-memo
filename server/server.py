@@ -1,11 +1,13 @@
 """Vox Memo — FastAPI server that receives audio from ESP32, transcribes, and saves to Obsidian."""
 
 import json
+import os
 import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import openai
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from openai import OpenAI
@@ -26,7 +28,7 @@ def get_openai() -> OpenAI:
 
 
 def transcribe(audio_path: Path) -> str:
-    """Transcribe WAV file using OpenAI Whisper API."""
+    """Transcribe WAV file using OpenAI Whisper API. Raises openai.OpenAIError on failure."""
     client = get_openai()
     with open(audio_path, "rb") as f:
         result = client.audio.transcriptions.create(model="whisper-1", file=f, language="en")
@@ -77,8 +79,8 @@ def write_memo(timestamp: datetime, title: str, content: str, tags: list[str]) -
         f"---\n"
     )
 
-    # Sanitize title for filename
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip()
+    # Sanitize title for filename (cap at 100 chars to avoid OS filename limits)
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title).strip()[:100]
     if not safe_title:
         safe_title = timestamp.strftime("%Y%m%d_%H%M%S")
     filename = f"{safe_title}.md"
@@ -101,7 +103,8 @@ async def receive_memo(request: Request):
     # Parse timestamp from header or use now
     ts_header = request.headers.get("X-Memo-Timestamp", "")
     try:
-        timestamp = datetime.strptime(ts_header, "%Y%m%d_%H%M%S")
+        # Parse as UTC-aware so frontmatter timestamps are always consistent
+        timestamp = datetime.strptime(ts_header, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         timestamp = datetime.now(timezone.utc)
 
@@ -110,6 +113,11 @@ async def receive_memo(request: Request):
     existing = list(config.OBSIDIAN_INBOX.glob(f"*{ts_slug}*"))
     if existing:
         return {"status": "duplicate", "title": existing[0].stem, "preview": "", "filename": existing[0].name}
+
+    # Reject oversized uploads before reading body into RAM (~5MB limit)
+    content_length = request.headers.get("content-length")
+    if content_length is not None and int(content_length) > 5 * 1024 * 1024:
+        return Response(status_code=413, content="Request too large")
 
     # Save uploaded audio to temp file
     body = await request.body()
@@ -128,7 +136,11 @@ async def receive_memo(request: Request):
             shutil.copy2(tmp_path, archive_dir / f"{ts_slug}.wav")
 
         # Step 1: Transcribe
-        raw_text = transcribe(tmp_path)
+        try:
+            raw_text = transcribe(tmp_path)
+        except openai.OpenAIError as e:
+            print(f"Transcription error: {e}")
+            return Response(status_code=503, content="Transcription service unavailable")
         if not raw_text.strip():
             return {"status": "empty", "title": "", "preview": "", "filename": ""}
 
@@ -144,9 +156,9 @@ async def receive_memo(request: Request):
             tags = cleaned.get("tags", [])
             if "vox-memo" not in tags:
                 tags.insert(0, "vox-memo")
-            # Overwrite the raw file with cleaned version
-            raw_path.unlink()
+            # Write clean version first, then remove raw (order matters: if write fails, raw survives)
             final_path = write_memo(timestamp, title, content, tags)
+            raw_path.unlink()
         else:
             title = raw_title
             content = raw_text
@@ -169,4 +181,5 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host=config.HOST, port=config.PORT, reload=True, log_level="debug")
+    debug = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
+    uvicorn.run("server:app", host=config.HOST, port=config.PORT, reload=debug, log_level="debug")

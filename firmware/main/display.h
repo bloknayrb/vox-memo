@@ -61,7 +61,7 @@ void display_next_screen(void);
 void display_update_time(int hour, int min);
 void display_update_wifi(bool connected);
 void display_update_queue_badge(int count);
-void display_update_battery(int percent);
+void display_update_battery(int percent);  // Phase 6: called by AXP2101 driver
 
 /**
  * Update recording screen.

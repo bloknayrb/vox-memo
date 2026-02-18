@@ -6,6 +6,7 @@
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -38,7 +39,14 @@ static int wifi_pass_idx = 0;
 static EventGroupHandle_t wifi_events;
 #define WIFI_CONNECTED_BIT  BIT0
 
+// One-shot timer for reconnect delay (avoids blocking the system event task)
+static esp_timer_handle_t reconnect_timer = NULL;
+
 static void try_next_password(void);
+
+static void reconnect_timer_cb(void *arg) {
+    esp_wifi_connect();
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -54,9 +62,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             wifi_pass_idx = (wifi_pass_idx + 1) % 2;
             try_next_password();
         } else {
-            ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d), reconnecting...", disc->reason);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            esp_wifi_connect();
+            ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d), reconnecting in 2s...", disc->reason);
+            // Use a one-shot timer instead of vTaskDelay — blocking here starves system events
+            if (reconnect_timer == NULL) {
+                const esp_timer_create_args_t timer_args = {
+                    .callback = reconnect_timer_cb,
+                    .name = "wifi_reconnect",
+                };
+                esp_timer_create(&timer_args, &reconnect_timer);
+            } else {
+                esp_timer_stop(reconnect_timer);  // stop if already pending
+            }
+            esp_timer_start_once(reconnect_timer, 2000000 /* 2s in µs */);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;

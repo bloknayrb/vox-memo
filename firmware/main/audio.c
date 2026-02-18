@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "audio";
@@ -20,6 +21,10 @@ static const char *TAG = "audio";
 // I2S channel handle
 static i2s_chan_handle_t rx_chan = NULL;
 static i2s_chan_handle_t tx_chan = NULL;
+
+// Completion semaphores — given by task on exit, taken by stop functions to sync shutdown
+static SemaphoreHandle_t rec_done_sem = NULL;
+static SemaphoreHandle_t play_done_sem = NULL;
 
 // Recording state
 static volatile bool recording = false;
@@ -64,12 +69,6 @@ static void write_wav_header(FILE *f, uint32_t data_size) {
         .data = "data",
         .data_size = data_size,
     };
-    // Fix string fields (can't assign string literals to char arrays in initializer)
-    memcpy(hdr.riff, "RIFF", 4);
-    memcpy(hdr.wave, "WAVE", 4);
-    memcpy(hdr.fmt, "fmt ", 4);
-    memcpy(hdr.data, "data", 4);
-
     fseek(f, 0, SEEK_SET);
     fwrite(&hdr, sizeof(hdr), 1, f);
 }
@@ -89,7 +88,11 @@ static void recording_task(void *arg) {
 
         esp_err_t ret = i2s_channel_read(rx_chan, buf, sizeof(buf), &bytes_read, pdMS_TO_TICKS(100));
         if (ret == ESP_OK && bytes_read > 0 && rec_file) {
-            fwrite(buf, 1, bytes_read, rec_file);
+            if (fwrite(buf, 1, bytes_read, rec_file) != bytes_read) {
+                ESP_LOGE(TAG, "fwrite failed — disk full? Stopping recording");
+                recording = false;
+                break;
+            }
             rec_bytes_written += bytes_read;
         }
     }
@@ -103,11 +106,15 @@ static void recording_task(void *arg) {
     }
 
     i2s_channel_disable(rx_chan);
+    xSemaphoreGive(rec_done_sem);
     vTaskDelete(NULL);
 }
 
 esp_err_t audio_init(void) {
     ESP_LOGI(TAG, "Audio init — configure I2S + ES8311 codec");
+
+    rec_done_sem = xSemaphoreCreateBinary();
+    play_done_sem = xSemaphoreCreateBinary();
 
     // Enable PA (speaker amplifier) — active HIGH, off during init
     gpio_reset_pin(AUDIO_PA_CTRL);
@@ -176,10 +183,11 @@ esp_err_t audio_start_recording(void) {
     // Generate filename from current time
     time_t now;
     time(&now);
-    struct tm *t = localtime(&now);
+    struct tm t;
+    localtime_r(&now, &t);
     snprintf(rec_filepath, sizeof(rec_filepath), MEMO_BASE_PATH "/%04d%02d%02d_%02d%02d%02d.wav",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec);
+             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+             t.tm_hour, t.tm_min, t.tm_sec);
 
     rec_file = fopen(rec_filepath, "wb");
     if (!rec_file) {
@@ -197,8 +205,11 @@ esp_err_t audio_start_recording(void) {
     recording = true;
     rec_start_us = esp_timer_get_time();
 
+    // Drain any stale semaphore signal before starting
+    xSemaphoreTake(rec_done_sem, 0);
+
     // Spawn recording task
-    xTaskCreate(recording_task, "rec_task", 4096, NULL, 5, NULL);
+    xTaskCreate(recording_task, "rec_task", 6144, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "Recording started: %s", rec_filepath);
     return ESP_OK;
@@ -209,8 +220,9 @@ esp_err_t audio_stop_recording(void) {
         return ESP_ERR_INVALID_STATE;
     }
     recording = false;
-    // Task will finalize and delete itself
-    ESP_LOGI(TAG, "Recording stop requested");
+    // Wait for task to finalize WAV header and close file before returning
+    xSemaphoreTake(rec_done_sem, pdMS_TO_TICKS(5000));
+    ESP_LOGI(TAG, "Recording stopped");
     return ESP_OK;
 }
 
@@ -233,6 +245,7 @@ static void playback_task(void *arg) {
         playing = false;
         gpio_set_level(AUDIO_PA_CTRL, 0);
         display_memo_playback_done();
+        xSemaphoreGive(play_done_sem);
         vTaskDelete(NULL);
         return;
     }
@@ -261,6 +274,7 @@ static void playback_task(void *arg) {
 
     ESP_LOGI(TAG, "Playback finished: %s", playback_path);
     display_memo_playback_done();
+    xSemaphoreGive(play_done_sem);
     vTaskDelete(NULL);
 }
 
@@ -278,10 +292,13 @@ esp_err_t audio_play(const char *filename) {
     // Enable I2S transmit channel
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
 
+    // Drain any stale semaphore signal before starting
+    xSemaphoreTake(play_done_sem, 0);
+
     playing = true;
     stop_playback = false;
 
-    xTaskCreate(playback_task, "play_task", 4096, NULL, 5, NULL);
+    xTaskCreate(playback_task, "play_task", 6144, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "Playback requested: %s", filename);
     return ESP_OK;
@@ -290,7 +307,8 @@ esp_err_t audio_play(const char *filename) {
 esp_err_t audio_stop_playback(void) {
     if (!playing) return ESP_ERR_INVALID_STATE;
     stop_playback = true;
-    // Task will clean up and self-delete
+    // Wait for task to disable I2S and release hardware before returning
+    xSemaphoreTake(play_done_sem, pdMS_TO_TICKS(5000));
     return ESP_OK;
 }
 
@@ -301,9 +319,8 @@ int audio_get_memo_count(void) {
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strstr(entry->d_name, ".wav")) {
-            count++;
-        }
+        const char *ext = strrchr(entry->d_name, '.');
+        if (ext && strcmp(ext, ".wav") == 0) count++;
     }
     closedir(dir);
     return count;
@@ -318,7 +335,8 @@ char **audio_list_memos(int *count) {
     int n = 0;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strstr(entry->d_name, ".wav")) n++;
+        const char *ext = strrchr(entry->d_name, '.');
+        if (ext && strcmp(ext, ".wav") == 0) n++;
     }
 
     if (n == 0) {
@@ -331,7 +349,8 @@ char **audio_list_memos(int *count) {
 
     int i = 0;
     while ((entry = readdir(dir)) != NULL && i < n) {
-        if (strstr(entry->d_name, ".wav")) {
+        const char *ext = strrchr(entry->d_name, '.');
+        if (ext && strcmp(ext, ".wav") == 0) {
             char path[280];  // MEMO_BASE_PATH(7) + "/" + NAME_MAX(255) + NUL
             snprintf(path, sizeof(path), MEMO_BASE_PATH "/%s", entry->d_name);
             list[i] = strdup(path);

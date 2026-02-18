@@ -179,6 +179,11 @@ static void format_memo_label(const char *path, char *out, size_t out_len) {
     }
 }
 
+// --- Memo list item delete handler — frees the strdup'd path stored as user_data ---
+static void memo_item_delete_cb(lv_event_t *e) {
+    free(lv_event_get_user_data(e));
+}
+
 // --- Memo list item tap handler ---
 static void memo_item_click_cb(lv_event_t *e) {
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
@@ -650,13 +655,13 @@ void display_refresh_memo_list(void) {
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x5C997C), 0);
 
-        // Store path as user_data — strdup so it outlives this scope
-        // (LVGL doesn't free it; small leak acceptable on embedded with few memos)
+        // Register delete callback to free the strdup'd path when the button is destroyed
+        lv_obj_add_event_cb(btn, memo_item_delete_cb, LV_EVENT_DELETE, memos[i]);
         lv_obj_add_event_cb(btn, memo_item_click_cb, LV_EVENT_CLICKED, memos[i]);
-        // Don't free memos[i] here — it's used as event user_data
+        // memos[i] ownership transferred to the delete callback; do not free here
     }
 
-    // Free the array (but not individual strings — they're owned by event callbacks now)
+    // Free the pointer array only — individual strings are freed via LV_EVENT_DELETE
     if (memos) free(memos);
 
     lvgl_port_unlock();

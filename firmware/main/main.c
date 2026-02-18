@@ -94,8 +94,9 @@ void app_main(void) {
             // Update clock
             time_t now;
             time(&now);
-            struct tm *t = localtime(&now);
-            display_update_time(t->tm_hour, t->tm_min);
+            struct tm t;
+            localtime_r(&now, &t);
+            display_update_time(t.tm_hour, t.tm_min);
 
             // Update Wi-Fi indicator
             display_update_wifi(network_is_connected());

@@ -5,6 +5,7 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -12,10 +13,9 @@ static const char *TAG = "touch";
 
 // Button state tracking
 static bool btn_record_held = false;
-static int64_t btn_record_press_time = 0;
 
-// Debounce
-#define DEBOUNCE_MS 50
+// Deferred badge update: set to non-zero after recording stops, checked each loop tick
+static int64_t badge_update_at_us = 0;
 
 esp_err_t touch_init(void) {
     // Configure BOOT button (GPIO9 on ESP32-C6) as input with pull-up
@@ -28,12 +28,11 @@ esp_err_t touch_init(void) {
     };
     ESP_ERROR_CHECK(gpio_config(&btn_cfg));
 
-    // TODO: Initialize FT3168 touch controller via I2C
-    // The Waveshare BSP should provide touch driver init.
-    // Touch coordinates are fed into LVGL's input driver.
+    // FT3168 touch is initialized in display_init() via esp_lcd_touch (FT5x06 driver).
+    // Touch events are handled by the LVGL input device registered in display.c.
 
-    // TODO: Initialize AXP2101 PMIC I2C for PWR button polling
-    // Read AXP2101 IRQ status register to detect PKEY press/release.
+    // AXP2101 PMIC PWR button polling is Phase 6 (pending AXP2101 driver integration).
+    // Will read IRQ status register via I2C to detect PKEY press/release.
 
     ESP_LOGI(TAG, "Touch/button input initialized");
     return ESP_OK;
@@ -58,9 +57,8 @@ void touch_poll(void) {
             ESP_LOGI(TAG, "Record button released — stopping recording");
             audio_stop_recording();
             display_show_screen(SCREEN_IDLE);
-            // Update queue badge after a brief delay for file finalization
-            vTaskDelay(pdMS_TO_TICKS(200));
-            display_update_queue_badge(audio_get_memo_count());
+            // Defer badge update 200ms so file is fully closed before counting
+            badge_update_at_us = esp_timer_get_time() + 200000;
         }
     }
 
@@ -69,11 +67,15 @@ void touch_poll(void) {
         display_update_recording(audio_get_recording_elapsed(), AUDIO_MAX_DURATION_SEC);
     }
 
-    // --- PWR button (AXP2101 PKEY) — cycle screens ---
-    // TODO: Poll AXP2101 IRQ status register via I2C
-    // On PKEY short press: display_next_screen()
+    // --- Deferred queue badge update ---
+    if (badge_update_at_us > 0 && esp_timer_get_time() >= badge_update_at_us) {
+        badge_update_at_us = 0;
+        display_update_queue_badge(audio_get_memo_count());
+    }
+
+    // --- PWR button (AXP2101 PKEY) — Phase 6 ---
+    // Poll AXP2101 IRQ status register via I2C; on PKEY short press: display_next_screen()
 
     // --- Touch (FT3168) ---
-    // TODO: Read touch coordinates from FT3168 via I2C
-    // Feed into LVGL input driver for list scrolling, tap-to-play, etc.
+    // Handled by LVGL input device registered in display_init() — no polling needed here.
 }
