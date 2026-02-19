@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include "esp_littlefs.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -125,7 +126,7 @@ static void recording_task(void *arg) {
             /* One-shot: log first 32 raw bytes to confirm I2S data is non-zero */
             static int dump_count = 0;
             if (dump_count < 3) {
-                ESP_LOG_BUFFER_HEXDUMP("audio_raw", stereo_buf, 64, ESP_LOG_INFO);
+                ESP_LOG_BUFFER_HEXDUMP("audio_raw", stereo_buf, 64, ESP_LOG_DEBUG);
                 dump_count++;
             }
             /* Extract left channel: stereo frame = [L int16, R int16], take every L */
@@ -256,7 +257,7 @@ esp_err_t audio_init(void) {
 }
 
 esp_err_t audio_start_recording(void) {
-    if (recording) {
+    if (recording || playing) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -322,7 +323,9 @@ esp_err_t audio_stop_recording(bool *was_discarded) {
     }
     recording = false;
     // Wait for task to finalize WAV header and close file before returning
-    xSemaphoreTake(rec_done_sem, pdMS_TO_TICKS(5000));
+    if (xSemaphoreTake(rec_done_sem, pdMS_TO_TICKS(5000)) == pdFALSE) {
+        ESP_LOGW(TAG, "Semaphore timeout waiting for recording task to finish");
+    }
     if (was_discarded) {
         *was_discarded = last_rec_discarded;
     }
@@ -415,6 +418,7 @@ esp_err_t audio_play(const char *filename) {
     }
     es8311_mute_dac(false);
     vTaskDelay(pdMS_TO_TICKS(20));  // DAC settling time
+    ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
 
     // Drain any stale semaphore signal before starting
     xSemaphoreTake(play_done_sem, 0);
@@ -432,7 +436,9 @@ esp_err_t audio_stop_playback(void) {
     if (!playing) return ESP_ERR_INVALID_STATE;
     stop_playback = true;
     // Wait for task to disable I2S and release hardware before returning
-    xSemaphoreTake(play_done_sem, pdMS_TO_TICKS(5000));
+    if (xSemaphoreTake(play_done_sem, pdMS_TO_TICKS(5000)) == pdFALSE) {
+        ESP_LOGW(TAG, "Semaphore timeout waiting for playback task to finish");
+    }
     return ESP_OK;
 }
 
@@ -448,6 +454,10 @@ int audio_get_memo_count(void) {
     }
     closedir(dir);
     return count;
+}
+
+static int memo_path_cmp_newest_first(const void *a, const void *b) {
+    return strcmp(*(const char **)b, *(const char **)a);
 }
 
 char **audio_list_memos(int *count) {
@@ -483,6 +493,7 @@ char **audio_list_memos(int *count) {
     }
     closedir(dir);
     *count = i;
+    qsort(list, (size_t)i, sizeof(char *), memo_path_cmp_newest_first);
     return list;
 }
 

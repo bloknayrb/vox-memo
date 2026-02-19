@@ -69,6 +69,9 @@ static lv_obj_t *selected_btn = NULL;
 static bool delete_confirming = false;
 static lv_timer_t *delete_confirm_timer = NULL;
 
+// Brief message state
+static lv_timer_t *brief_msg_timer = NULL;
+
 // Style for list items and action buttons
 static lv_style_t style_list_btn;
 static lv_style_t style_list_btn_selected;
@@ -674,6 +677,14 @@ void display_update_recording(int elapsed_sec, int max_sec) {
 
 void display_show_sync_result(const char *title, bool success) {
     if (!display_ready) return;
+
+    // Don't interrupt the queue screen — refresh the list in place instead
+    if (current_screen == SCREEN_QUEUE) {
+        display_refresh_memo_list();
+        display_update_queue_badge(audio_get_memo_count());
+        return;
+    }
+
     lvgl_port_lock(0);
     if (lbl_sync_status) {
         lv_label_set_text(lbl_sync_status, success ? "Synced" : "Sync Failed");
@@ -738,6 +749,24 @@ void display_refresh_memo_list(void) {
     // Free the pointer array only — individual strings are freed via LV_EVENT_DELETE
     if (memos) free(memos);
 
+    lvgl_port_unlock();
+}
+
+static void brief_msg_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    brief_msg_timer = NULL;
+    lvgl_port_lock(0);
+    if (lbl_prompt) lv_label_set_text(lbl_prompt, "Hold to record");
+    lvgl_port_unlock();
+}
+
+void display_show_brief_message(const char *msg, int ms) {
+    if (!display_ready || !lbl_prompt || current_screen != SCREEN_IDLE) return;
+    lvgl_port_lock(0);
+    lv_label_set_text(lbl_prompt, msg);
+    if (brief_msg_timer) lv_timer_delete(brief_msg_timer);
+    brief_msg_timer = lv_timer_create(brief_msg_timer_cb, (uint32_t)ms, NULL);
+    lv_timer_set_repeat_count(brief_msg_timer, 1);
     lvgl_port_unlock();
 }
 

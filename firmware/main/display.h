@@ -89,6 +89,12 @@ void display_refresh_memo_list(void);
 void display_memo_playback_done(void);
 
 /**
+ * Briefly show a message on the idle screen prompt label, then restore
+ * "Hold to record" after ms milliseconds. No-op if not on idle screen.
+ */
+void display_show_brief_message(const char *msg, int ms);
+
+/**
  * Get the I2C bus handle (shared between touch and audio codec).
  */
 void *display_get_i2c_handle(void);

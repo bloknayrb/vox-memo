@@ -126,7 +126,7 @@ async def receive_memo(request: Request):
 
     # Check for duplicate (same timestamp already processed)
     ts_slug = timestamp.strftime("%Y%m%d_%H%M%S")
-    existing = list(config.OBSIDIAN_INBOX.glob(f"*{ts_slug}*"))
+    existing = list(config.OBSIDIAN_INBOX.glob(f"*{ts_slug}*.md"))
     if existing:
         return {"status": "duplicate", "title": existing[0].stem, "preview": "", "filename": existing[0].name}
 

@@ -59,6 +59,8 @@ void touch_poll(void) {
         display_show_screen(SCREEN_IDLE);
         if (!discarded) {
             badge_update_at_us = esp_timer_get_time() + 200000;
+        } else {
+            display_show_brief_message("Too short", 1500);
         }
     }
 
