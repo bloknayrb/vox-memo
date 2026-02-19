@@ -48,17 +48,19 @@ esp_err_t display_init(void);
 void display_show_screen(screen_id_t screen);
 
 /**
- * Cycle to the next screen (for Button 2).
- */
-void display_next_screen(void);
-
-/**
  * Update idle screen elements.
  */
 void display_update_time(int hour, int min);
-void display_update_wifi(bool connected, const char *ssid);
+typedef enum {
+    WIFI_DISPLAY_DISCONNECTED,
+    WIFI_DISPLAY_CONNECTING,
+    WIFI_DISPLAY_CONNECTED,
+    WIFI_DISPLAY_SUSPENDED,
+} wifi_display_state_t;
+
+void display_update_wifi(wifi_display_state_t state, const char *ssid);
 void display_update_queue_badge(int count);
-void display_update_battery(int percent);
+void display_update_battery(int percent, bool charging);
 
 /**
  * Update sync progress on idle screen.

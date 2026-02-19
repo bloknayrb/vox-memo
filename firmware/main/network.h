@@ -39,6 +39,16 @@ esp_err_t network_check_server(void);
 const char *network_get_ssid(void);
 
 /**
+ * Returns true if WiFi is intentionally suspended (power save).
+ */
+bool network_is_suspended(void);
+
+/**
+ * Returns true if WiFi is currently connecting/transitioning.
+ */
+bool network_is_connecting(void);
+
+/**
  * Suspend WiFi to save power (queue empty, nothing to sync).
  * Calls esp_wifi_stop() — reconnects automatically via network_wake().
  */

@@ -117,13 +117,21 @@ void app_main(void) {
             display_update_time(t.tm_hour, t.tm_min);
 
             // Update Wi-Fi indicator
-            display_update_wifi(network_is_connected(), network_get_ssid());
+            if (network_is_connected()) {
+                display_update_wifi(WIFI_DISPLAY_CONNECTED, network_get_ssid());
+            } else if (network_is_suspended()) {
+                display_update_wifi(WIFI_DISPLAY_SUSPENDED, NULL);
+            } else if (network_is_connecting()) {
+                display_update_wifi(WIFI_DISPLAY_CONNECTING, NULL);
+            } else {
+                display_update_wifi(WIFI_DISPLAY_DISCONNECTED, NULL);
+            }
 
             // Update battery every ~10 seconds
             if (loop_count % 1000 == 0) {
                 int batt = axp2101_get_battery_percent();
                 if (batt >= 0) {
-                    display_update_battery(batt);
+                    display_update_battery(batt, axp2101_is_vbus_present());
                 }
             }
 

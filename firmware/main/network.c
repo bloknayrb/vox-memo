@@ -102,7 +102,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT);
-        display_update_wifi(false, NULL);
+        display_update_wifi(WIFI_DISPLAY_DISCONNECTED, NULL);
 
         if (wifi_state == WIFI_STATE_TRANSITIONING || wifi_state == WIFI_STATE_SUSPENDED) {
             // Expected disconnect during SSID switch or power-save suspend
@@ -125,7 +125,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         wifi_state = WIFI_STATE_IDLE;
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
         esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
-        display_update_wifi(true, wifi_entries[wifi_entry_idx].ssid);
+        display_update_wifi(WIFI_DISPLAY_CONNECTED, wifi_entries[wifi_entry_idx].ssid);
 
         // Set active server IP from the current WiFi entry
         strncpy(active_server_ip, wifi_entries[wifi_entry_idx].server_ip,
@@ -165,7 +165,7 @@ void network_suspend(void) {
     wifi_state = WIFI_STATE_SUSPENDED;
     esp_wifi_disconnect();
     esp_wifi_stop();
-    display_update_wifi(false, NULL);
+    display_update_wifi(WIFI_DISPLAY_SUSPENDED, NULL);
     ESP_LOGI(TAG, "WiFi suspended (queue empty)");
 }
 
@@ -198,6 +198,14 @@ esp_err_t network_init(void) {
     ESP_LOGI(TAG, "Wi-Fi initialized (%d networks), connecting to '%s'...",
              (int)WIFI_ENTRY_COUNT, wifi_entries[wifi_entry_idx].ssid);
     return ESP_OK;
+}
+
+bool network_is_suspended(void) {
+    return wifi_state == WIFI_STATE_SUSPENDED;
+}
+
+bool network_is_connecting(void) {
+    return wifi_state == WIFI_STATE_CONNECTING || wifi_state == WIFI_STATE_TRANSITIONING;
 }
 
 bool network_is_connected(void) {

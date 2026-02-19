@@ -50,6 +50,8 @@ static lv_obj_t *lbl_sync_progress = NULL;
 static lv_obj_t *lbl_rec_time = NULL;
 static lv_obj_t *lbl_rec_hint = NULL;
 static lv_obj_t *obj_pulse = NULL;
+static lv_obj_t *bar_vu = NULL;
+static lv_anim_t pulse_anim;
 
 // Sync confirmation widgets
 static lv_obj_t *lbl_sync_title = NULL;
@@ -64,6 +66,11 @@ static lv_obj_t *btn_delete = NULL;
 static lv_obj_t *lbl_queue_empty = NULL;
 static char selected_memo_path[280] = {0};
 static lv_obj_t *selected_btn = NULL;
+
+// Playback progress widgets
+static lv_obj_t *bar_playback = NULL;
+static lv_obj_t *lbl_playback_time = NULL;
+static lv_timer_t *playback_progress_timer = NULL;
 
 // Delete confirmation state
 static bool delete_confirming = false;
@@ -188,13 +195,20 @@ static void format_memo_label(const char *path, char *out, size_t out_len) {
         };
         const char *mstr = (mon >= 1 && mon <= 12) ? months[mon - 1] : "???";
 
-        // Get file size
+        // Get file size and calculate duration (16kHz, 16-bit, mono = 32000 bytes/sec)
         struct stat st;
-        long kb = 0;
-        if (stat(path, &st) == 0) {
-            kb = (long)(st.st_size / 1024);
+        if (stat(path, &st) == 0 && st.st_size > 44) {
+            int dur_sec = (int)((st.st_size - 44) / 32000);
+            if (dur_sec >= 60) {
+                snprintf(out, out_len, "%s %d, %02d:%02d  %dm %ds",
+                         mstr, day, hour, min, dur_sec / 60, dur_sec % 60);
+            } else {
+                snprintf(out, out_len, "%s %d, %02d:%02d  %ds",
+                         mstr, day, hour, min, dur_sec > 0 ? dur_sec : 1);
+            }
+        } else {
+            snprintf(out, out_len, "%s %d, %02d:%02d", mstr, day, hour, min);
         }
-        snprintf(out, out_len, "%s %d, %02d:%02d  %ld KB", mstr, day, hour, min, kb);
     } else {
         snprintf(out, out_len, "%s", fname);
     }
@@ -254,14 +268,57 @@ static void memo_item_click_cb(lv_event_t *e) {
     }
 }
 
+// --- Playback progress timer callback ---
+static void playback_progress_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    int elapsed = 0, total = 0;
+    if (audio_get_playback_progress(&elapsed, &total)) {
+        if (bar_playback && total > 0) {
+            lv_bar_set_value(bar_playback, (elapsed * 100) / total, LV_ANIM_ON);
+        }
+        if (lbl_playback_time) {
+            lv_label_set_text_fmt(lbl_playback_time, "%d:%02d / %d:%02d",
+                                  elapsed / 60, elapsed % 60, total / 60, total % 60);
+        }
+    }
+}
+
+static void stop_playback_progress(void) {
+    if (playback_progress_timer) {
+        lv_timer_delete(playback_progress_timer);
+        playback_progress_timer = NULL;
+    }
+    if (bar_playback) lv_obj_add_flag(bar_playback, LV_OBJ_FLAG_HIDDEN);
+    if (lbl_playback_time) lv_obj_add_flag(lbl_playback_time, LV_OBJ_FLAG_HIDDEN);
+}
+
 // --- Play button handler ---
 static void play_btn_cb(lv_event_t *e) {
     (void)e;
     if (selected_memo_path[0] == '\0') return;
-    audio_play(selected_memo_path);
-    // Update button text to indicate playing
+
+    if (audio_is_playing()) {
+        // Stop playback
+        audio_stop_playback();
+        return;  // display_memo_playback_done() will reset the button
+    }
+
+    // Start playback
+    if (audio_play(selected_memo_path) != ESP_OK) return;
     lv_obj_t *lbl = lv_obj_get_child(btn_play, 0);
-    if (lbl) lv_label_set_text(lbl, "Playing...");
+    if (lbl) lv_label_set_text(lbl, "Stop");
+
+    // Show and start progress tracking
+    if (bar_playback) {
+        lv_bar_set_value(bar_playback, 0, LV_ANIM_OFF);
+        lv_obj_clear_flag(bar_playback, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (lbl_playback_time) {
+        lv_label_set_text(lbl_playback_time, "0:00 / 0:00");
+        lv_obj_clear_flag(lbl_playback_time, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (playback_progress_timer) lv_timer_delete(playback_progress_timer);
+    playback_progress_timer = lv_timer_create(playback_progress_timer_cb, 250, NULL);
 }
 
 // --- Delete button handler (two-tap confirmation) ---
@@ -323,7 +380,7 @@ static void create_idle_screen(void) {
     lv_label_set_text(lbl_wifi, "No Wi-Fi");
     lv_obj_align(lbl_wifi, LV_ALIGN_TOP_LEFT, 10, 10);
     lv_obj_set_width(lbl_wifi, 180);
-    lv_label_set_long_mode(lbl_wifi, LV_LABEL_LONG_CLIP);
+    lv_label_set_long_mode(lbl_wifi, LV_LABEL_LONG_DOT);
 
     lbl_battery = lv_label_create(scr);
     lv_obj_add_style(lbl_battery, &style_dim, 0);
@@ -332,6 +389,10 @@ static void create_idle_screen(void) {
 
     // Swipe left → memo list
     lv_obj_add_event_cb(scr, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+}
+
+static void pulse_anim_cb(void *obj, int32_t value) {
+    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
 }
 
 static void create_recording_screen(void) {
@@ -346,6 +407,17 @@ static void create_recording_screen(void) {
     lv_obj_set_style_border_width(obj_pulse, 0, 0);
     lv_obj_align(obj_pulse, LV_ALIGN_CENTER, 0, -40);
 
+    // Smooth breathe animation on pulse circle opacity
+    lv_anim_init(&pulse_anim);
+    lv_anim_set_var(&pulse_anim, obj_pulse);
+    lv_anim_set_exec_cb(&pulse_anim, pulse_anim_cb);
+    lv_anim_set_values(&pulse_anim, LV_OPA_40, LV_OPA_90);
+    lv_anim_set_duration(&pulse_anim, 1200);
+    lv_anim_set_playback_duration(&pulse_anim, 1200);
+    lv_anim_set_repeat_count(&pulse_anim, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&pulse_anim, lv_anim_path_ease_in_out);
+    lv_anim_start(&pulse_anim);
+
     lbl_rec_time = lv_label_create(scr);
     lv_obj_add_style(lbl_rec_time, &style_sage_large, 0);
     lv_label_set_text(lbl_rec_time, "0:00");
@@ -355,6 +427,16 @@ static void create_recording_screen(void) {
     lv_obj_add_style(lbl_rec_hint, &style_dim, 0);
     lv_label_set_text(lbl_rec_hint, "Release to stop");
     lv_obj_align(lbl_rec_hint, LV_ALIGN_CENTER, 0, 80);
+
+    // VU meter bar — horizontal bar showing mic input level
+    bar_vu = lv_bar_create(scr);
+    lv_obj_set_size(bar_vu, DISP_WIDTH - 80, 8);
+    lv_obj_align(bar_vu, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_bar_set_range(bar_vu, 0, 100);
+    lv_bar_set_value(bar_vu, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar_vu, lv_color_hex(0x1A1A1A), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar_vu, lv_color_hex(0x5C997C), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar_vu, LV_OPA_COVER, LV_PART_MAIN);
 }
 
 static void create_queue_screen(void) {
@@ -406,13 +488,42 @@ static void create_queue_screen(void) {
     lv_obj_center(lbl_d);
     lv_obj_add_event_cb(btn_delete, delete_btn_cb, LV_EVENT_CLICKED, NULL);
 
+    // Playback progress bar (hidden by default, shown during playback)
+    bar_playback = lv_bar_create(scr);
+    lv_obj_set_size(bar_playback, DISP_WIDTH - 60, 6);
+    lv_obj_align(bar_playback, LV_ALIGN_BOTTOM_MID, 0, -72);
+    lv_bar_set_range(bar_playback, 0, 100);
+    lv_bar_set_value(bar_playback, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar_playback, lv_color_hex(0x1A1A1A), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar_playback, lv_color_hex(0x5C997C), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar_playback, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_add_flag(bar_playback, LV_OBJ_FLAG_HIDDEN);
+
+    // Playback time label (hidden by default)
+    lbl_playback_time = lv_label_create(scr);
+    lv_obj_add_style(lbl_playback_time, &style_dim, 0);
+    lv_label_set_text(lbl_playback_time, "");
+    lv_obj_align(lbl_playback_time, LV_ALIGN_BOTTOM_MID, 0, -78);
+    lv_obj_add_flag(lbl_playback_time, LV_OBJ_FLAG_HIDDEN);
+
     // Swipe right → back to idle
     lv_obj_add_event_cb(scr, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+}
+
+static void sync_screen_tap_cb(lv_event_t *e) {
+    (void)e;
+    if (sync_return_timer) {
+        lv_timer_delete(sync_return_timer);
+        sync_return_timer = NULL;
+    }
+    display_show_screen(SCREEN_IDLE);
 }
 
 static void create_sync_screen(void) {
     lv_obj_t *scr = screens[SCREEN_SYNC_CONFIRM] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scr, sync_screen_tap_cb, LV_EVENT_CLICKED, NULL);
 
     lbl_sync_status = lv_label_create(scr);
     lv_obj_add_style(lbl_sync_status, &style_sage_large, 0);
@@ -608,13 +719,6 @@ void display_show_screen(screen_id_t screen) {
     }
 }
 
-void display_next_screen(void) {
-    if (!display_ready) return;
-    screen_id_t next = (current_screen + 1) % SCREEN_COUNT;
-    if (next == SCREEN_SYNC_CONFIRM) next = SCREEN_IDLE;
-    display_show_screen(next);
-}
-
 void display_update_time(int hour, int min) {
     if (!display_ready || !lbl_time) return;
     lvgl_port_lock(0);
@@ -622,13 +726,22 @@ void display_update_time(int hour, int min) {
     lvgl_port_unlock();
 }
 
-void display_update_wifi(bool connected, const char *ssid) {
+void display_update_wifi(wifi_display_state_t state, const char *ssid) {
     if (!display_ready || !lbl_wifi) return;
     lvgl_port_lock(0);
-    if (connected && ssid && ssid[0]) {
-        lv_label_set_text(lbl_wifi, ssid);
-    } else {
-        lv_label_set_text(lbl_wifi, connected ? "Wi-Fi" : "No Wi-Fi");
+    switch (state) {
+        case WIFI_DISPLAY_CONNECTED:
+            lv_label_set_text(lbl_wifi, (ssid && ssid[0]) ? ssid : "Wi-Fi");
+            break;
+        case WIFI_DISPLAY_CONNECTING:
+            lv_label_set_text(lbl_wifi, "Connecting...");
+            break;
+        case WIFI_DISPLAY_SUSPENDED:
+            lv_label_set_text(lbl_wifi, "Wi-Fi idle");
+            break;
+        default:
+            lv_label_set_text(lbl_wifi, "No Wi-Fi");
+            break;
     }
     lvgl_port_unlock();
 }
@@ -644,10 +757,24 @@ void display_update_queue_badge(int count) {
     lvgl_port_unlock();
 }
 
-void display_update_battery(int percent) {
+void display_update_battery(int percent, bool charging) {
     if (!display_ready || !lbl_battery) return;
     lvgl_port_lock(0);
-    lv_label_set_text_fmt(lbl_battery, "%d%%", percent);
+    if (charging) {
+        lv_label_set_text_fmt(lbl_battery, "%d%% +", percent);
+    } else {
+        lv_label_set_text_fmt(lbl_battery, "%d%%", percent);
+    }
+    // Color: red <20%, yellow <40%, sage green otherwise
+    lv_color_t color;
+    if (percent < 20 && !charging) {
+        color = lv_color_hex(0xCC4444);  // red
+    } else if (percent < 40 && !charging) {
+        color = lv_color_hex(0xCCAA44);  // yellow
+    } else {
+        color = lv_color_hex(0x3A6B52);  // dim sage (matches style_dim)
+    }
+    lv_obj_set_style_text_color(lbl_battery, color, 0);
     lvgl_port_unlock();
 }
 
@@ -664,13 +791,16 @@ void display_update_recording(int elapsed_sec, int max_sec) {
     if (lbl_rec_time) {
         lv_label_set_text_fmt(lbl_rec_time, "%d:%02d", elapsed_sec / 60, elapsed_sec % 60);
     }
-    if (obj_pulse) {
-        static const lv_opa_t pulse_opa[] = {LV_OPA_50, LV_OPA_80, LV_OPA_60};
-        int phase = (elapsed_sec * 2) % 3;
-        lv_obj_set_style_bg_opa(obj_pulse, pulse_opa[phase], 0);
-    }
+    // Pulse animation is driven by lv_anim_t — no manual update needed
     if (lbl_rec_hint && max_sec - elapsed_sec <= 10) {
         lv_label_set_text_fmt(lbl_rec_hint, "Auto-stop in %ds", max_sec - elapsed_sec);
+    }
+    // Update VU meter — scale RMS (0-32767) to percentage with log-ish curve
+    if (bar_vu) {
+        int rms = audio_get_recording_rms();
+        // Map RMS to 0-100 with compression: clamp at ~8000 for full scale
+        int level = (rms > 8000) ? 100 : (rms * 100 / 8000);
+        lv_bar_set_value(bar_vu, level, LV_ANIM_ON);
     }
     lvgl_port_unlock();
 }
@@ -775,6 +905,7 @@ void display_memo_playback_done(void) {
     lvgl_port_lock(0);
     lv_obj_t *lbl = lv_obj_get_child(btn_play, 0);
     if (lbl) lv_label_set_text(lbl, "Play");
+    stop_playback_progress();
     lvgl_port_unlock();
 }
 
@@ -841,9 +972,12 @@ void display_tick_inactivity(void) {
             display_set_brightness(0x4D);  // ~30% brightness
         }
     } else {
-        // On battery: normal sleep timeout
+        // On battery: dim at half the sleep timeout, then sleep
         if (inactivity_seconds >= DISPLAY_SLEEP_TIMEOUT_SEC) {
             display_sleep();
+        } else if (!display_dimmed && inactivity_seconds >= DISPLAY_SLEEP_TIMEOUT_SEC / 2) {
+            display_dimmed = true;
+            display_set_brightness(0x4D);  // ~30% brightness
         }
     }
 }

@@ -4,6 +4,7 @@
 #include "network.h"
 
 #include <dirent.h>
+#include <math.h>
 #include "esp_littlefs.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,12 +58,16 @@ static volatile bool recording = false;
 static volatile bool playing = false;
 static volatile bool stop_playback = false;
 static char playback_path[280] = {0};
+static volatile uint32_t playback_bytes_played = 0;
+static volatile uint32_t playback_bytes_total = 0;
 static FILE *rec_file = NULL;
 static int64_t rec_start_us = 0;
 static uint32_t rec_bytes_written = 0;
 static char rec_filepath[64] = {0};
 static volatile bool last_rec_discarded = false;
 static int rec_max_sec = AUDIO_MAX_DURATION_SEC;
+static volatile int rec_rms = 0;
+static volatile bool rec_storage_full = false;
 
 // WAV header for 16kHz 16-bit mono PCM
 typedef struct __attribute__((packed)) {
@@ -135,9 +140,18 @@ static void recording_task(void *arg) {
             for (int i = 0; i < frames; i++) {
                 mono_buf[i] = stereo[i * 2];  /* left channel */
             }
+            // Calculate RMS for VU meter
+            int64_t sum_sq = 0;
+            for (int i = 0; i < frames; i++) {
+                int32_t s = mono_buf[i];
+                sum_sq += s * s;
+            }
+            rec_rms = (int)sqrtf((float)sum_sq / frames);
+
             size_t mono_bytes = (size_t)frames * 2;
             if (fwrite(mono_buf, 1, mono_bytes, rec_file) != mono_bytes) {
                 ESP_LOGE(TAG, "fwrite failed — disk full? Stopping recording");
+                rec_storage_full = true;
                 recording = false;
                 break;
             }
@@ -284,6 +298,7 @@ esp_err_t audio_start_recording(void) {
 
     // Write placeholder WAV header (will be updated on stop)
     rec_bytes_written = 0;
+    rec_storage_full = false;
     write_wav_header(rec_file, 0);
 
     esp_err_t codec_err = es8311_resume();
@@ -363,7 +378,11 @@ static void playback_task(void *arg) {
         return;
     }
 
-    // Skip WAV header (44 bytes)
+    // Get total audio data size and skip WAV header
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    playback_bytes_total = (fsize > (long)sizeof(wav_header_t)) ? (uint32_t)(fsize - sizeof(wav_header_t)) : 0;
+    playback_bytes_played = 0;
     fseek(f, sizeof(wav_header_t), SEEK_SET);
 
     ESP_LOGI(TAG, "Playback started: %s", playback_path);
@@ -371,6 +390,7 @@ static void playback_task(void *arg) {
     while (playing && !stop_playback) {
         size_t bytes_read = fread(mono_buf, 1, sizeof(mono_buf), f);
         if (bytes_read == 0) break;  // EOF
+        playback_bytes_played += bytes_read;
 
         /* Expand mono → stereo: duplicate each int16 sample into L and R */
         const int16_t *mono = (const int16_t *)mono_buf;
@@ -442,6 +462,17 @@ esp_err_t audio_stop_playback(void) {
     return ESP_OK;
 }
 
+bool audio_is_playing(void) {
+    return playing;
+}
+
+bool audio_get_playback_progress(int *elapsed_sec, int *total_sec) {
+    if (!playing) return false;
+    if (elapsed_sec) *elapsed_sec = (int)(playback_bytes_played / AUDIO_BYTES_PER_SEC);
+    if (total_sec) *total_sec = (int)(playback_bytes_total / AUDIO_BYTES_PER_SEC);
+    return true;
+}
+
 int audio_get_memo_count(void) {
     int count = 0;
     DIR *dir = opendir(MEMO_BASE_PATH);
@@ -504,4 +535,12 @@ esp_err_t audio_delete_memo(const char *filename) {
     }
     ESP_LOGE(TAG, "Failed to delete: %s", filename);
     return ESP_FAIL;
+}
+
+bool audio_was_storage_full(void) {
+    return rec_storage_full;
+}
+
+int audio_get_recording_rms(void) {
+    return recording ? rec_rms : 0;
 }

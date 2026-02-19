@@ -71,6 +71,17 @@ esp_err_t audio_play(const char *filename);
 esp_err_t audio_stop_playback(void);
 
 /**
+ * Returns true if currently playing back audio.
+ */
+bool audio_is_playing(void);
+
+/**
+ * Get playback progress as elapsed and total seconds.
+ * Returns false if not playing.
+ */
+bool audio_get_playback_progress(int *elapsed_sec, int *total_sec);
+
+/**
  * Get the number of memo files queued on flash.
  */
 int audio_get_memo_count(void);
@@ -99,3 +110,15 @@ char **audio_list_memos(int *count);
  * @param filename  Full path like "/memos/20260217_153000.wav"
  */
 esp_err_t audio_delete_memo(const char *filename);
+
+/**
+ * Returns true if the last recording was stopped due to storage being full.
+ * Resets on next recording start.
+ */
+bool audio_was_storage_full(void);
+
+/**
+ * Get the current recording RMS level (0-32767).
+ * Updated each DMA cycle during recording. Returns 0 when not recording.
+ */
+int audio_get_recording_rms(void);

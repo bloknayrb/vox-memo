@@ -44,7 +44,11 @@ void touch_poll(void) {
         // Button just pressed — wake display or start recording
         display_note_activity();
         btn_record_held = true;
-        if (!audio_is_recording() && !display_is_sleeping() && !usb_sync_in_progress()) {
+        if (display_is_sleeping()) {
+            // Just wake the display, don't start recording
+        } else if (usb_sync_in_progress()) {
+            display_show_brief_message("USB sync active", 1500);
+        } else if (!audio_is_recording()) {
             ESP_LOGI(TAG, "Record button pressed — starting recording");
             audio_start_recording();
             display_show_screen(SCREEN_RECORDING);
@@ -57,7 +61,9 @@ void touch_poll(void) {
         bool discarded = false;
         audio_stop_recording(&discarded);
         display_show_screen(SCREEN_IDLE);
-        if (!discarded) {
+        if (audio_was_storage_full()) {
+            display_show_brief_message("Storage full", 2000);
+        } else if (!discarded) {
             badge_update_at_us = esp_timer_get_time() + 200000;
         } else {
             display_show_brief_message("Too short", 1500);
