@@ -30,6 +30,7 @@
 
 // Screen IDs
 typedef enum {
+    SCREEN_SETTINGS,
     SCREEN_IDLE,
     SCREEN_RECORDING,
     SCREEN_QUEUE,
@@ -123,5 +124,11 @@ void display_tick_inactivity(void);
  * Used for dim/wake transitions when on USB power.
  */
 void display_set_brightness(uint8_t level);
+
+/**
+ * Apply current accent color and font size from settings to all live widgets.
+ * Call after changing settings_get()->accent_color or settings_get()->font_large.
+ */
+void display_apply_theme(void);
 
 // Note: LVGL tick and task handling are managed by esp_lvgl_port.

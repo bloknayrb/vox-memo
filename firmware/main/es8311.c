@@ -10,6 +10,7 @@
  */
 
 #include "es8311.h"
+#include "settings.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -150,21 +151,29 @@ esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)
     return ESP_OK;
 }
 
+esp_err_t es8311_set_dac_volume(uint8_t vol)
+{
+    if (!dev_handle) return ESP_ERR_INVALID_STATE;
+    return es_write(REG_DAC_VOL, vol);
+}
+
 esp_err_t es8311_enable_dac(void)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
-    es_write(REG_DAC_31, 0x00);  /* DAC power on (0x60 mutes DSM+DEM!) */
-    es_write(REG_DAC_VOL, 0xEF); /* ~-6dB (0xFF=0dB, 0x00=-96dB, step=0.376dB/step) */
-    es_write(REG_DAC_35, 0x20);  /* Moderate ramp (pop suppression) */
-    es_write(REG_SYS_14, 0x1A);  /* Enable analog MIC + PGA */
-    ESP_LOGI(TAG, "DAC enabled");
+    uint8_t vol = settings_get()->volume;
+    es_write(REG_DAC_31, 0x00);   /* DAC power on (0x60 mutes DSM+DEM!) */
+    es_write(REG_DAC_VOL, vol);   /* volume from settings (default 0xEF ~-6dB) */
+    es_write(REG_DAC_35, 0x20);   /* Moderate ramp (pop suppression) */
+    es_write(REG_SYS_14, 0x1A);   /* Enable analog MIC + PGA */
+    ESP_LOGI(TAG, "DAC enabled, vol=0x%02X", vol);
     return ESP_OK;
 }
 
 esp_err_t es8311_mute_dac(bool mute)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
-    return es_write(REG_DAC_VOL, mute ? 0x00 : 0xEF);  /* 0xEF=~-6dB, 0x00=-96dB */
+    uint8_t vol = settings_get()->volume;
+    return es_write(REG_DAC_VOL, mute ? 0x00 : vol);
 }
 
 esp_err_t es8311_suspend(void)
