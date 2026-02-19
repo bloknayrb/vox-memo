@@ -84,7 +84,7 @@ void touch_poll(void) {
     // --- Touch (FT3168) ---
     // Handled by LVGL input device registered in display_init() — no polling needed here.
     // Read INT pin to detect screen touches for inactivity tracking.
-    if (gpio_get_level(BSP_TOUCH_INT) == 0) {
+    if (!display_is_sleeping() && gpio_get_level(BSP_TOUCH_INT) == 0) {
         display_note_activity();
     }
 }
