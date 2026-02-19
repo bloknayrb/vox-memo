@@ -28,14 +28,22 @@ def get_openai() -> OpenAI:
     return _openai_client
 
 
-def transcribe(audio_path: Path) -> str:
-    """Transcribe WAV file using OpenAI Whisper API. Raises OpenAIError on failure."""
+SILENCE_RMS_THRESHOLD = 400  # 16kHz/16-bit mono; speech typically 1000–8000 RMS
+
+
+def transcribe(audio_path: Path) -> str | None:
+    """Transcribe WAV file using OpenAI Whisper API. Returns None if audio is silent.
+    Raises OpenAIError on failure."""
     with wave.open(str(audio_path)) as wf:
         pcm = wf.readframes(wf.getnframes())
         samples = array.array('h', pcm)
         rms = math.sqrt(sum(s*s for s in samples) / len(samples)) if samples else 0
         duration_s = wf.getnframes() / wf.getframerate()
     print(f"[audio] {duration_s:.1f}s  RMS={rms:.0f}  bytes={len(pcm)}")
+
+    if rms < SILENCE_RMS_THRESHOLD:
+        print(f"[audio] Silence gate — RMS {rms:.0f} below threshold, skipping Whisper")
+        return None
 
     client = get_openai()
     with open(audio_path, "rb") as f:
@@ -149,6 +157,8 @@ async def receive_memo(request: Request):
         except OpenAIError as e:
             print(f"Transcription error: {e}")
             return Response(status_code=503, content="Transcription service unavailable")
+        if raw_text is None:
+            return {"status": "silent", "title": "", "preview": "", "filename": ""}
         if not raw_text.strip():
             return {"status": "empty", "title": "", "preview": "", "filename": ""}
 

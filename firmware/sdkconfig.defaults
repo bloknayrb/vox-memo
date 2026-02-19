@@ -36,9 +36,10 @@ CONFIG_ESP_HTTP_CLIENT_ENABLE_BASIC_AUTH=n
 # Power management
 CONFIG_PM_ENABLE=y
 
-# Console — UART0 only, free USB Serial/JTAG for data transfer
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# Console — USB Serial/JTAG (temporary: debugging audio RMS=0 issue)
+# To restore: flip back to UART_DEFAULT=y, USB=n, then delete sdkconfig and rebuild
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Logging

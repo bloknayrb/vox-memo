@@ -21,10 +21,6 @@
 // I2C bus is shared — pins defined in display.h (BSP_I2C_SDA/SCL)
 // ES8311 uses display_get_i2c_handle() to access the bus
 
-// Speaker amplifier enable (PA control) — set HIGH to enable
-// GPIO6 matches C6-2.06 BSP (GPIO0 is QSPI PCLK for display)
-#define AUDIO_PA_CTRL       GPIO_NUM_6
-
 // DMA configuration — extra descriptors to absorb LittleFS write latency
 #define AUDIO_DMA_DESC_NUM  14
 #define AUDIO_DMA_BUF_LEN   1024

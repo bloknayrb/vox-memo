@@ -12,14 +12,15 @@
 
 #define ES8311_I2C_ADDR  0x18  /* CS/AD0 pin low (default on Waveshare board) */
 
-/* MIC PGA gain — each step is 3 dB */
+/* MIC gain — esp-bsp REG[0x16] scale: 0-7, each step is 6 dB */
 #define ES8311_MIC_GAIN_0DB   0x00
-#define ES8311_MIC_GAIN_6DB   0x02
-#define ES8311_MIC_GAIN_12DB  0x04
-#define ES8311_MIC_GAIN_18DB  0x06
-#define ES8311_MIC_GAIN_24DB  0x08  /* Good default for voice */
-#define ES8311_MIC_GAIN_30DB  0x0A
-#define ES8311_MIC_GAIN_33DB  0x0B
+#define ES8311_MIC_GAIN_6DB   0x01
+#define ES8311_MIC_GAIN_12DB  0x02
+#define ES8311_MIC_GAIN_18DB  0x03
+#define ES8311_MIC_GAIN_24DB  0x04  /* Good default for voice */
+#define ES8311_MIC_GAIN_30DB  0x05
+#define ES8311_MIC_GAIN_36DB  0x06
+#define ES8311_MIC_GAIN_42DB  0x07
 
 /**
  * Initialize ES8311 for 16kHz/16-bit recording.
@@ -42,7 +43,6 @@ esp_err_t es8311_mute_dac(bool mute);
 
 /**
  * Power down ADC, DAC, and charge pump to save ~3-5 mA.
- * Register state (clocks, bias, LDO) is preserved for fast resume.
  */
 esp_err_t es8311_suspend(void);
 
