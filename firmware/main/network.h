@@ -63,5 +63,12 @@ void network_wake(void);
 /**
  * Background sync task — call from a FreeRTOS task.
  * Continuously checks for queued memos and uploads when on Wi-Fi.
+ * Interval is read from settings_get()->sync_interval_s each cycle.
  */
 void network_sync_task(void *arg);
+
+/**
+ * Signal the sync task to run immediately, skipping its current sleep interval.
+ * Safe to call from any task or ISR context.
+ */
+void network_trigger_sync(void);

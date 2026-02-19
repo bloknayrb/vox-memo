@@ -5,6 +5,7 @@ idf_component_register(
         "axp2101.c"
         "display.c"
         "es8311.c"
+        "settings.c"
         "touch.c"
         "network.c"
         "usb_sync.c"
