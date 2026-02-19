@@ -79,6 +79,9 @@ static lv_timer_t *delete_confirm_timer = NULL;
 // Brief message state
 static lv_timer_t *brief_msg_timer = NULL;
 
+// Ambient clock mode — active when queue is empty
+static bool ambient_clock_active = false;
+
 // Style for list items and action buttons
 static lv_style_t style_list_btn;
 static lv_style_t style_list_btn_selected;
@@ -132,10 +135,10 @@ static void init_styles(void) {
     lv_style_set_bg_color(&style_list_btn, lv_color_hex(0x1A1A1A));
     lv_style_set_bg_opa(&style_list_btn, LV_OPA_COVER);
     lv_style_set_text_color(&style_list_btn, lv_color_hex(0x5C997C));
-    lv_style_set_text_font(&style_list_btn, &lv_font_montserrat_18);
+    lv_style_set_text_font(&style_list_btn, &lv_font_montserrat_20);
     lv_style_set_border_width(&style_list_btn, 0);
     lv_style_set_radius(&style_list_btn, 8);
-    lv_style_set_pad_ver(&style_list_btn, 12);
+    lv_style_set_pad_ver(&style_list_btn, 16);  // 20px text + 32px pad = 52px min touch target
     lv_style_set_pad_hor(&style_list_btn, 10);
 
     lv_style_init(&style_list_btn_selected);
@@ -149,10 +152,10 @@ static void init_styles(void) {
     lv_style_set_bg_color(&style_action_btn, lv_color_hex(0x2A4A3A));
     lv_style_set_bg_opa(&style_action_btn, LV_OPA_COVER);
     lv_style_set_text_color(&style_action_btn, lv_color_hex(0x5C997C));
-    lv_style_set_text_font(&style_action_btn, &lv_font_montserrat_18);
+    lv_style_set_text_font(&style_action_btn, &lv_font_montserrat_20);
     lv_style_set_radius(&style_action_btn, 10);
     lv_style_set_border_width(&style_action_btn, 0);
-    lv_style_set_pad_all(&style_action_btn, 10);
+    lv_style_set_pad_all(&style_action_btn, 12);
 }
 
 // Forward declaration — defined after memo_item_delete_cb
@@ -351,6 +354,28 @@ static void delete_btn_cb(lv_event_t *e) {
     display_update_queue_badge(audio_get_memo_count());
 }
 
+// Switch idle screen between ambient (large centered clock) and normal layout.
+// Must be called with the LVGL port lock held.
+static void set_ambient_mode(bool active) {
+    if (!lbl_time || !lbl_queue || !lbl_sync_progress || !lbl_prompt || !lbl_wifi) return;
+    ambient_clock_active = active;
+    if (active) {
+        lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_48, 0);
+        lv_obj_align(lbl_time, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_add_flag(lbl_queue,         LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_sync_progress, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_prompt,        LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_wifi,          LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_36, 0);
+        lv_obj_align(lbl_time, LV_ALIGN_TOP_MID, 0, 60);
+        lv_obj_clear_flag(lbl_queue,         LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_sync_progress, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_prompt,        LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_wifi,          LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void create_idle_screen(void) {
     lv_obj_t *scr = screens[SCREEN_IDLE] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
@@ -430,7 +455,7 @@ static void create_recording_screen(void) {
 
     // VU meter bar — horizontal bar showing mic input level
     bar_vu = lv_bar_create(scr);
-    lv_obj_set_size(bar_vu, DISP_WIDTH - 80, 8);
+    lv_obj_set_size(bar_vu, DISP_WIDTH - 80, 12);
     lv_obj_align(bar_vu, LV_ALIGN_BOTTOM_MID, 0, -40);
     lv_bar_set_range(bar_vu, 0, 100);
     lv_bar_set_value(bar_vu, 0, LV_ANIM_OFF);
@@ -446,6 +471,7 @@ static void create_queue_screen(void) {
     // Header
     lbl_queue_header = lv_label_create(scr);
     lv_obj_add_style(lbl_queue_header, &style_sage, 0);
+    lv_obj_set_style_text_font(lbl_queue_header, &lv_font_montserrat_24, 0);
     lv_label_set_text(lbl_queue_header, "Memos");
     lv_obj_align(lbl_queue_header, LV_ALIGN_TOP_MID, 0, 10);
 
@@ -469,8 +495,8 @@ static void create_queue_screen(void) {
     // Play button
     btn_play = lv_btn_create(scr);
     lv_obj_add_style(btn_play, &style_action_btn, 0);
-    lv_obj_set_size(btn_play, 140, 48);
-    lv_obj_align(btn_play, LV_ALIGN_BOTTOM_LEFT, 25, -15);
+    lv_obj_set_size(btn_play, 160, 56);
+    lv_obj_align(btn_play, LV_ALIGN_BOTTOM_LEFT, 15, -15);
     lv_obj_add_flag(btn_play, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *lbl_p = lv_label_create(btn_play);
     lv_label_set_text(lbl_p, "Play");
@@ -480,8 +506,8 @@ static void create_queue_screen(void) {
     // Delete button
     btn_delete = lv_btn_create(scr);
     lv_obj_add_style(btn_delete, &style_action_btn, 0);
-    lv_obj_set_size(btn_delete, 140, 48);
-    lv_obj_align(btn_delete, LV_ALIGN_BOTTOM_RIGHT, -25, -15);
+    lv_obj_set_size(btn_delete, 160, 56);
+    lv_obj_align(btn_delete, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
     lv_obj_add_flag(btn_delete, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *lbl_d = lv_label_create(btn_delete);
     lv_label_set_text(lbl_d, "Delete");
@@ -490,7 +516,7 @@ static void create_queue_screen(void) {
 
     // Playback progress bar (hidden by default, shown during playback)
     bar_playback = lv_bar_create(scr);
-    lv_obj_set_size(bar_playback, DISP_WIDTH - 60, 6);
+    lv_obj_set_size(bar_playback, DISP_WIDTH - 60, 8);
     lv_obj_align(bar_playback, LV_ALIGN_BOTTOM_MID, 0, -72);
     lv_bar_set_range(bar_playback, 0, 100);
     lv_bar_set_value(bar_playback, 0, LV_ANIM_OFF);
@@ -801,8 +827,10 @@ void display_update_queue_badge(int count) {
     lvgl_port_lock(0);
     if (count > 0) {
         lv_label_set_text_fmt(lbl_queue, "%d memo%s queued", count, count > 1 ? "s" : "");
+        if (ambient_clock_active) set_ambient_mode(false);
     } else {
         lv_label_set_text(lbl_queue, "");
+        if (!ambient_clock_active) set_ambient_mode(true);
     }
     lvgl_port_unlock();
 }
