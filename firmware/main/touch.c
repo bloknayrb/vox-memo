@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "display.h"
+#include "network.h"
 #include "usb_sync.h"
 
 #include "driver/gpio.h"
@@ -14,6 +15,8 @@ static const char *TAG = "touch";
 
 // Button state tracking
 static bool btn_record_held = false;
+static bool press_started_recording = false;  // true only if recording actually began
+static int64_t press_start_us = 0;            // timestamp of button press
 
 // Deferred badge update: set to non-zero after recording stops, checked each loop tick
 static int64_t badge_update_at_us = 0;
@@ -44,24 +47,40 @@ void touch_poll(void) {
         // Button just pressed — wake display or start recording
         display_note_activity();
         btn_record_held = true;
+        press_start_us = esp_timer_get_time();
         if (display_is_sleeping()) {
-            // Just wake the display, don't start recording
+            // Just wake the display — no recording, no sync
+            press_started_recording = false;
         } else if (usb_sync_in_progress()) {
             display_show_brief_message("USB sync active", 1500);
+            press_started_recording = false;
         } else if (!audio_is_recording()) {
             ESP_LOGI(TAG, "Record button pressed — starting recording");
             audio_start_recording();
             display_show_screen(SCREEN_RECORDING);
+            press_started_recording = true;
+        } else {
+            press_started_recording = false;
         }
     } else if (!pressed && btn_record_held) {
-        // Button just released — stop recording.
-        // audio_stop_recording handles the case where max-duration auto-stop
-        // already fired (recording=false), consuming the done semaphore.
+        // Button just released
+        bool pressed_long = (esp_timer_get_time() - press_start_us) >= 500000;  // 500ms
         btn_record_held = false;
         bool discarded = false;
         audio_stop_recording(&discarded);
         display_show_screen(SCREEN_IDLE);
-        if (audio_was_storage_full()) {
+
+        if (!press_started_recording) {
+            // Pressed while sleeping/blocked — nothing to do
+        } else if (!pressed_long) {
+            // Short tap — trigger an immediate sync; audio was auto-discarded (<1s)
+            if (network_is_connected()) {
+                network_trigger_sync();
+                display_show_brief_message("Syncing...", 1000);
+            } else {
+                display_show_brief_message("No WiFi", 1500);
+            }
+        } else if (audio_was_storage_full()) {
             display_show_brief_message("Storage full", 2000);
         } else if (!discarded) {
             badge_update_at_us = esp_timer_get_time() + 200000;

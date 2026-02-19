@@ -1,4 +1,5 @@
 #include "network.h"
+#include "settings.h"
 
 #include "audio.h"
 #include "display.h"
@@ -22,6 +23,9 @@
 #include <time.h>
 
 static const char *TAG = "network";
+
+// Task handle for the sync task — used by network_trigger_sync() to wake it early
+static TaskHandle_t sync_task_handle = NULL;
 
 // Wi-Fi credentials and server IPs from secrets.h (gitignored)
 #include "secrets.h"
@@ -382,11 +386,24 @@ esp_err_t network_upload_memo(const char *filepath, char *title_out, size_t titl
     return ESP_OK;
 }
 
+void network_trigger_sync(void) {
+    if (sync_task_handle) {
+        xTaskNotify(sync_task_handle, 0, eNoAction);
+    }
+}
+
 void network_sync_task(void *arg) {
+    sync_task_handle = xTaskGetCurrentTaskHandle();
     ESP_LOGI(TAG, "Sync task started");
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(SYNC_INTERVAL_MS));
+        // Sleep for the configured interval, or until network_trigger_sync() wakes us early.
+        // sync_interval_s == 0 means manual-only: sleep indefinitely until triggered.
+        uint32_t interval_s = settings_get()->sync_interval_s;
+        TickType_t wait = (interval_s == 0)
+            ? portMAX_DELAY
+            : pdMS_TO_TICKS((uint32_t)interval_s * 1000);
+        ulTaskNotifyTake(pdTRUE, wait);
 
         if (!network_is_connected()) continue;
         if (usb_sync_in_progress()) continue;

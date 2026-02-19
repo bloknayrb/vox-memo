@@ -19,6 +19,7 @@
 #include "axp2101.h"
 #include "display.h"
 #include "network.h"
+#include "settings.h"
 #include "touch.h"
 #include "usb_sync.h"
 
@@ -48,7 +49,7 @@ void app_main(void) {
     // Log initial heap for SRAM budget validation
     ESP_LOGI(TAG, "Free heap at boot: %lu bytes", (unsigned long)esp_get_free_heap_size());
 
-    // Initialize NVS (required for Wi-Fi)
+    // Initialize NVS (required for Wi-Fi and settings)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -56,11 +57,15 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    // Load user settings from NVS (before display so brightness applies at init)
+    ESP_ERROR_CHECK(settings_init());
+
     // Mount flash storage
     init_littlefs();
 
     // Initialize subsystems
     ESP_ERROR_CHECK(display_init());
+    display_set_brightness(settings_get()->brightness);
 
     // Initialize AXP2101 PMIC (battery + VBUS monitoring)
     i2c_master_bus_handle_t i2c_bus = (i2c_master_bus_handle_t)display_get_i2c_handle();

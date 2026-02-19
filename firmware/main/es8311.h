@@ -32,7 +32,15 @@
 esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain);
 
 /**
+ * Set DAC digital volume directly.
+ * 0x00 = -96 dB (muted), 0xFF = 0 dB (full), 0xEF = ~-6 dB (default).
+ * Takes effect immediately during active playback.
+ */
+esp_err_t es8311_set_dac_volume(uint8_t vol);
+
+/**
  * Enable the DAC output path for playback through external PA.
+ * Volume is read from settings_get()->volume.
  */
 esp_err_t es8311_enable_dac(void);
 

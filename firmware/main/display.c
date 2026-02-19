@@ -1,6 +1,8 @@
 #include "display.h"
 #include "audio.h"
 #include "axp2101.h"
+#include "es8311.h"
+#include "settings.h"
 
 #include <string.h>
 #include <sys/stat.h>
@@ -67,6 +69,25 @@ static lv_obj_t *lbl_queue_empty = NULL;
 static char selected_memo_path[280] = {0};
 static lv_obj_t *selected_btn = NULL;
 
+// Settings screen widgets
+static lv_obj_t *settings_sync_btns[4]    = {0};  // 15s / 30s / 60s / Off
+static lv_obj_t *lbl_vol_pct              = NULL;
+static lv_obj_t *lbl_bri_pct             = NULL;
+static lv_obj_t *settings_color_dots[6]  = {0};
+static lv_obj_t *btn_clock_12h           = NULL;
+static lv_obj_t *btn_clock_24h           = NULL;
+static lv_obj_t *btn_font_normal         = NULL;
+static lv_obj_t *btn_font_large          = NULL;
+
+static const uint32_t ACCENT_PRESETS[6] = {
+    0x5C997C,  // Sage green (default)
+    0x4A7FA5,  // Steel blue
+    0xA05CA0,  // Mauve
+    0xC07840,  // Amber
+    0xC04040,  // Red
+    0x707070,  // Gray
+};
+
 // Playback progress widgets
 static lv_obj_t *bar_playback = NULL;
 static lv_obj_t *lbl_playback_time = NULL;
@@ -78,6 +99,9 @@ static lv_timer_t *delete_confirm_timer = NULL;
 
 // Brief message state
 static lv_timer_t *brief_msg_timer = NULL;
+
+// Ambient clock mode — active when queue is empty
+static bool ambient_clock_active = false;
 
 // Style for list items and action buttons
 static lv_style_t style_list_btn;
@@ -132,10 +156,10 @@ static void init_styles(void) {
     lv_style_set_bg_color(&style_list_btn, lv_color_hex(0x1A1A1A));
     lv_style_set_bg_opa(&style_list_btn, LV_OPA_COVER);
     lv_style_set_text_color(&style_list_btn, lv_color_hex(0x5C997C));
-    lv_style_set_text_font(&style_list_btn, &lv_font_montserrat_18);
+    lv_style_set_text_font(&style_list_btn, &lv_font_montserrat_20);
     lv_style_set_border_width(&style_list_btn, 0);
     lv_style_set_radius(&style_list_btn, 8);
-    lv_style_set_pad_ver(&style_list_btn, 12);
+    lv_style_set_pad_ver(&style_list_btn, 16);  // 20px text + 32px pad = 52px min touch target
     lv_style_set_pad_hor(&style_list_btn, 10);
 
     lv_style_init(&style_list_btn_selected);
@@ -149,10 +173,10 @@ static void init_styles(void) {
     lv_style_set_bg_color(&style_action_btn, lv_color_hex(0x2A4A3A));
     lv_style_set_bg_opa(&style_action_btn, LV_OPA_COVER);
     lv_style_set_text_color(&style_action_btn, lv_color_hex(0x5C997C));
-    lv_style_set_text_font(&style_action_btn, &lv_font_montserrat_18);
+    lv_style_set_text_font(&style_action_btn, &lv_font_montserrat_20);
     lv_style_set_radius(&style_action_btn, 10);
     lv_style_set_border_width(&style_action_btn, 0);
-    lv_style_set_pad_all(&style_action_btn, 10);
+    lv_style_set_pad_all(&style_action_btn, 12);
 }
 
 // Forward declaration — defined after memo_item_delete_cb
@@ -168,7 +192,11 @@ static void gesture_event_cb(lv_event_t *e) {
     if (scr == screens[SCREEN_IDLE] && dir == LV_DIR_LEFT) {
         display_refresh_memo_list();
         display_show_screen(SCREEN_QUEUE);
+    } else if (scr == screens[SCREEN_IDLE] && dir == LV_DIR_RIGHT) {
+        display_show_screen(SCREEN_SETTINGS);
     } else if (scr == screens[SCREEN_QUEUE] && dir == LV_DIR_RIGHT) {
+        display_show_screen(SCREEN_IDLE);
+    } else if (scr == screens[SCREEN_SETTINGS] && dir == LV_DIR_LEFT) {
         display_show_screen(SCREEN_IDLE);
     }
 }
@@ -351,6 +379,28 @@ static void delete_btn_cb(lv_event_t *e) {
     display_update_queue_badge(audio_get_memo_count());
 }
 
+// Switch idle screen between ambient (large centered clock) and normal layout.
+// Must be called with the LVGL port lock held.
+static void set_ambient_mode(bool active) {
+    if (!lbl_time || !lbl_queue || !lbl_sync_progress || !lbl_prompt || !lbl_wifi) return;
+    ambient_clock_active = active;
+    if (active) {
+        lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_48, 0);
+        lv_obj_align(lbl_time, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_add_flag(lbl_queue,         LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_sync_progress, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_prompt,        LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(lbl_wifi,          LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_36, 0);
+        lv_obj_align(lbl_time, LV_ALIGN_TOP_MID, 0, 60);
+        lv_obj_clear_flag(lbl_queue,         LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_sync_progress, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_prompt,        LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(lbl_wifi,          LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void create_idle_screen(void) {
     lv_obj_t *scr = screens[SCREEN_IDLE] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
@@ -430,7 +480,7 @@ static void create_recording_screen(void) {
 
     // VU meter bar — horizontal bar showing mic input level
     bar_vu = lv_bar_create(scr);
-    lv_obj_set_size(bar_vu, DISP_WIDTH - 80, 8);
+    lv_obj_set_size(bar_vu, DISP_WIDTH - 80, 12);
     lv_obj_align(bar_vu, LV_ALIGN_BOTTOM_MID, 0, -40);
     lv_bar_set_range(bar_vu, 0, 100);
     lv_bar_set_value(bar_vu, 0, LV_ANIM_OFF);
@@ -446,6 +496,7 @@ static void create_queue_screen(void) {
     // Header
     lbl_queue_header = lv_label_create(scr);
     lv_obj_add_style(lbl_queue_header, &style_sage, 0);
+    lv_obj_set_style_text_font(lbl_queue_header, &lv_font_montserrat_24, 0);
     lv_label_set_text(lbl_queue_header, "Memos");
     lv_obj_align(lbl_queue_header, LV_ALIGN_TOP_MID, 0, 10);
 
@@ -469,8 +520,8 @@ static void create_queue_screen(void) {
     // Play button
     btn_play = lv_btn_create(scr);
     lv_obj_add_style(btn_play, &style_action_btn, 0);
-    lv_obj_set_size(btn_play, 140, 48);
-    lv_obj_align(btn_play, LV_ALIGN_BOTTOM_LEFT, 25, -15);
+    lv_obj_set_size(btn_play, 160, 56);
+    lv_obj_align(btn_play, LV_ALIGN_BOTTOM_LEFT, 15, -15);
     lv_obj_add_flag(btn_play, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *lbl_p = lv_label_create(btn_play);
     lv_label_set_text(lbl_p, "Play");
@@ -480,8 +531,8 @@ static void create_queue_screen(void) {
     // Delete button
     btn_delete = lv_btn_create(scr);
     lv_obj_add_style(btn_delete, &style_action_btn, 0);
-    lv_obj_set_size(btn_delete, 140, 48);
-    lv_obj_align(btn_delete, LV_ALIGN_BOTTOM_RIGHT, -25, -15);
+    lv_obj_set_size(btn_delete, 160, 56);
+    lv_obj_align(btn_delete, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
     lv_obj_add_flag(btn_delete, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *lbl_d = lv_label_create(btn_delete);
     lv_label_set_text(lbl_d, "Delete");
@@ -490,7 +541,7 @@ static void create_queue_screen(void) {
 
     // Playback progress bar (hidden by default, shown during playback)
     bar_playback = lv_bar_create(scr);
-    lv_obj_set_size(bar_playback, DISP_WIDTH - 60, 6);
+    lv_obj_set_size(bar_playback, DISP_WIDTH - 60, 8);
     lv_obj_align(bar_playback, LV_ALIGN_BOTTOM_MID, 0, -72);
     lv_bar_set_range(bar_playback, 0, 100);
     lv_bar_set_value(bar_playback, 0, LV_ANIM_OFF);
@@ -538,6 +589,329 @@ static void create_sync_screen(void) {
     lv_obj_set_width(lbl_sync_title, DISP_WIDTH - 40);
     lv_obj_set_style_text_align(lbl_sync_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(lbl_sync_title, LV_ALIGN_CENTER, 0, 20);
+}
+
+// --- Settings screen callbacks ---
+
+static void settings_sync_btn_cb(lv_event_t *e) {
+    uint32_t secs = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    settings_get()->sync_interval_s = secs;
+    settings_save();
+    // Highlight selected button, dim others
+    static const uint32_t SYNC_SECS[4] = {15, 30, 60, 0};
+    for (int i = 0; i < 4; i++) {
+        bool active = (SYNC_SECS[i] == secs);
+        lv_obj_set_style_bg_color(settings_sync_btns[i],
+            lv_color_hex(active ? 0x2A4A3A : 0x1A1A1A), 0);
+        lv_obj_set_style_border_width(settings_sync_btns[i], active ? 2 : 0, 0);
+    }
+}
+
+static void settings_vol_dec_cb(lv_event_t *e) {
+    (void)e;
+    app_settings_t *s = settings_get();
+    if (s->volume >= 16) s->volume -= 16; else s->volume = 0;
+    settings_save();
+    es8311_set_dac_volume(s->volume);
+    if (lbl_vol_pct) lv_label_set_text_fmt(lbl_vol_pct, "%d%%", (s->volume * 100) / 255);
+}
+
+static void settings_vol_inc_cb(lv_event_t *e) {
+    (void)e;
+    app_settings_t *s = settings_get();
+    if (s->volume <= 239) s->volume += 16; else s->volume = 255;
+    settings_save();
+    es8311_set_dac_volume(s->volume);
+    if (lbl_vol_pct) lv_label_set_text_fmt(lbl_vol_pct, "%d%%", (s->volume * 100) / 255);
+}
+
+static void settings_bri_dec_cb(lv_event_t *e) {
+    (void)e;
+    app_settings_t *s = settings_get();
+    if (s->brightness >= 48) s->brightness -= 32; else s->brightness = 32;
+    settings_save();
+    display_set_brightness(s->brightness);
+    if (lbl_bri_pct) lv_label_set_text_fmt(lbl_bri_pct, "%d%%", (s->brightness * 100) / 255);
+}
+
+static void settings_bri_inc_cb(lv_event_t *e) {
+    (void)e;
+    app_settings_t *s = settings_get();
+    if (s->brightness <= 223) s->brightness += 32; else s->brightness = 255;
+    settings_save();
+    display_set_brightness(s->brightness);
+    if (lbl_bri_pct) lv_label_set_text_fmt(lbl_bri_pct, "%d%%", (s->brightness * 100) / 255);
+}
+
+static void settings_color_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    settings_get()->accent_color = ACCENT_PRESETS[idx];
+    settings_save();
+    // Update dot borders to show selection
+    for (int i = 0; i < 6; i++) {
+        lv_obj_set_style_border_width(settings_color_dots[i], (i == idx) ? 3 : 0, 0);
+    }
+    display_apply_theme();
+}
+
+static void settings_clock_cb(lv_event_t *e) {
+    bool is_24h = (bool)(intptr_t)lv_event_get_user_data(e);
+    settings_get()->clock_24h = is_24h;
+    settings_save();
+    lv_obj_set_style_bg_color(btn_clock_24h, lv_color_hex(is_24h  ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_bg_color(btn_clock_12h, lv_color_hex(!is_24h ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_clock_24h, is_24h  ? 2 : 0, 0);
+    lv_obj_set_style_border_width(btn_clock_12h, !is_24h ? 2 : 0, 0);
+}
+
+static void settings_font_cb(lv_event_t *e) {
+    bool large = (bool)(intptr_t)lv_event_get_user_data(e);
+    settings_get()->font_large = large;
+    settings_save();
+    lv_obj_set_style_bg_color(btn_font_large,  lv_color_hex(large  ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_bg_color(btn_font_normal, lv_color_hex(!large ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_font_large,  large  ? 2 : 0, 0);
+    lv_obj_set_style_border_width(btn_font_normal, !large ? 2 : 0, 0);
+    display_apply_theme();
+}
+
+// Create a small toggle-style button pair label
+static lv_obj_t *make_seg_btn(lv_obj_t *parent, const char *text, int w, int h,
+                               lv_event_cb_t cb, void *user_data) {
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(btn, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 8, 0);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_center(lbl);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+    return btn;
+}
+
+static void create_settings_screen(void) {
+    lv_obj_t *scr = screens[SCREEN_SETTINGS] = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+
+    // Header
+    lv_obj_t *hdr = lv_label_create(scr);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_22, 0);
+    lv_label_set_text(hdr, "Settings");
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 12);
+
+    // Row positions: y starts at 56 for first row, +56 each row
+    int row_y = 56;
+    const int ROW_H = 52;
+    const int ROW_GAP = 56;
+    const int LBL_X = 14;
+    const int VAL_X = DISP_WIDTH / 2 - 10;
+
+    app_settings_t *s = settings_get();
+
+    // --- Row 1: Sync interval ---
+    lv_obj_t *lbl_sync = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_sync, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_sync, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_sync, "Sync");
+    lv_obj_set_pos(lbl_sync, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    static const uint32_t SYNC_SECS[4] = {15, 30, 60, 0};
+    static const char *SYNC_LABELS[4] = {"15s", "30s", "60s", "Off"};
+    int btn_w = 52, btn_h = ROW_H;
+    for (int i = 0; i < 4; i++) {
+        settings_sync_btns[i] = make_seg_btn(scr, SYNC_LABELS[i], btn_w, btn_h,
+                                             settings_sync_btn_cb,
+                                             (void *)(uintptr_t)SYNC_SECS[i]);
+        lv_obj_set_pos(settings_sync_btns[i], VAL_X + i * (btn_w + 4), row_y);
+        bool active = (SYNC_SECS[i] == s->sync_interval_s);
+        lv_obj_set_style_bg_color(settings_sync_btns[i],
+            lv_color_hex(active ? 0x2A4A3A : 0x1A1A1A), 0);
+        lv_obj_set_style_border_width(settings_sync_btns[i], active ? 2 : 0, 0);
+    }
+    row_y += ROW_GAP;
+
+    // --- Row 2: Volume stepper ---
+    lv_obj_t *lbl_vol = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_vol, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_vol, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_vol, "Volume");
+    lv_obj_set_pos(lbl_vol, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    lv_obj_t *vol_dec = make_seg_btn(scr, "-", 44, ROW_H, settings_vol_dec_cb, NULL);
+    lv_obj_set_pos(vol_dec, VAL_X, row_y);
+
+    lbl_vol_pct = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_vol_pct, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_vol_pct, &lv_font_montserrat_18, 0);
+    lv_label_set_text_fmt(lbl_vol_pct, "%d%%", (s->volume * 100) / 255);
+    lv_obj_set_pos(lbl_vol_pct, VAL_X + 52, row_y + (ROW_H - 18) / 2);
+
+    lv_obj_t *vol_inc = make_seg_btn(scr, "+", 44, ROW_H, settings_vol_inc_cb, NULL);
+    lv_obj_set_pos(vol_inc, VAL_X + 100, row_y);
+    row_y += ROW_GAP;
+
+    // --- Row 3: Brightness stepper ---
+    lv_obj_t *lbl_bri = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_bri, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_bri, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_bri, "Bright");
+    lv_obj_set_pos(lbl_bri, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    lv_obj_t *bri_dec = make_seg_btn(scr, "-", 44, ROW_H, settings_bri_dec_cb, NULL);
+    lv_obj_set_pos(bri_dec, VAL_X, row_y);
+
+    lbl_bri_pct = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_bri_pct, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_bri_pct, &lv_font_montserrat_18, 0);
+    lv_label_set_text_fmt(lbl_bri_pct, "%d%%", (s->brightness * 100) / 255);
+    lv_obj_set_pos(lbl_bri_pct, VAL_X + 52, row_y + (ROW_H - 18) / 2);
+
+    lv_obj_t *bri_inc = make_seg_btn(scr, "+", 44, ROW_H, settings_bri_inc_cb, NULL);
+    lv_obj_set_pos(bri_inc, VAL_X + 100, row_y);
+    row_y += ROW_GAP;
+
+    // --- Row 4: Accent color dots ---
+    lv_obj_t *lbl_col = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_col, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_col, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_col, "Color");
+    lv_obj_set_pos(lbl_col, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    for (int i = 0; i < 6; i++) {
+        lv_obj_t *dot = lv_btn_create(scr);
+        lv_obj_set_size(dot, 32, 32);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(ACCENT_PRESETS[i]), 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(dot, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(dot, (ACCENT_PRESETS[i] == s->accent_color) ? 3 : 0, 0);
+        lv_obj_set_pos(dot, VAL_X + i * 36, row_y + (ROW_H - 32) / 2);
+        lv_obj_add_event_cb(dot, settings_color_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        settings_color_dots[i] = dot;
+    }
+    row_y += ROW_GAP;
+
+    // --- Row 5: Clock format ---
+    lv_obj_t *lbl_clk = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_clk, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_clk, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_clk, "Clock");
+    lv_obj_set_pos(lbl_clk, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    btn_clock_24h = make_seg_btn(scr, "24h", 68, ROW_H, settings_clock_cb, (void *)(intptr_t)1);
+    lv_obj_set_pos(btn_clock_24h, VAL_X, row_y);
+    lv_obj_set_style_bg_color(btn_clock_24h,
+        lv_color_hex(s->clock_24h ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_clock_24h, s->clock_24h ? 2 : 0, 0);
+
+    btn_clock_12h = make_seg_btn(scr, "12h", 68, ROW_H, settings_clock_cb, (void *)(intptr_t)0);
+    lv_obj_set_pos(btn_clock_12h, VAL_X + 76, row_y);
+    lv_obj_set_style_bg_color(btn_clock_12h,
+        lv_color_hex(!s->clock_24h ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_clock_12h, !s->clock_24h ? 2 : 0, 0);
+    row_y += ROW_GAP;
+
+    // --- Row 6: Font size ---
+    lv_obj_t *lbl_fnt = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_fnt, lv_color_hex(0x5C997C), 0);
+    lv_obj_set_style_text_font(lbl_fnt, &lv_font_montserrat_18, 0);
+    lv_label_set_text(lbl_fnt, "Font");
+    lv_obj_set_pos(lbl_fnt, LBL_X, row_y + (ROW_H - 18) / 2);
+
+    btn_font_normal = make_seg_btn(scr, "Normal", 80, ROW_H, settings_font_cb, (void *)(intptr_t)0);
+    lv_obj_set_pos(btn_font_normal, VAL_X, row_y);
+    lv_obj_set_style_bg_color(btn_font_normal,
+        lv_color_hex(!s->font_large ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_font_normal, !s->font_large ? 2 : 0, 0);
+
+    btn_font_large = make_seg_btn(scr, "Large", 80, ROW_H, settings_font_cb, (void *)(intptr_t)1);
+    lv_obj_set_pos(btn_font_large, VAL_X + 88, row_y);
+    lv_obj_set_style_bg_color(btn_font_large,
+        lv_color_hex(s->font_large ? 0x2A4A3A : 0x1A1A1A), 0);
+    lv_obj_set_style_border_width(btn_font_large, s->font_large ? 2 : 0, 0);
+
+    // Swipe left → back to idle
+    lv_obj_add_event_cb(scr, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+}
+
+void display_apply_theme(void) {
+    if (!display_ready) return;
+    app_settings_t *s = settings_get();
+    lv_color_t accent = lv_color_hex(s->accent_color);
+
+    // Font table: normal vs large
+    const lv_font_t *font_clock   = s->font_large ? &lv_font_montserrat_44 : &lv_font_montserrat_36;
+    const lv_font_t *font_header  = s->font_large ? &lv_font_montserrat_28 : &lv_font_montserrat_24;
+    const lv_font_t *font_list    = s->font_large ? &lv_font_montserrat_22 : &lv_font_montserrat_20;
+    const lv_font_t *font_small   = s->font_large ? &lv_font_montserrat_16 : &lv_font_montserrat_18;
+
+    lvgl_port_lock(0);
+
+    // Update shared styles
+    lv_style_set_text_color(&style_sage,      accent);
+    lv_style_set_text_color(&style_sage_large, accent);
+    lv_style_set_text_color(&style_list_btn,   accent);
+    lv_style_set_text_color(&style_action_btn, accent);
+
+    lv_style_set_text_font(&style_list_btn,   font_list);
+    lv_style_set_text_font(&style_action_btn, font_list);
+
+    // Idle screen
+    if (lbl_time) {
+        lv_obj_set_style_text_color(lbl_time, accent, 0);
+        if (!ambient_clock_active) {
+            lv_obj_set_style_text_font(lbl_time, font_clock, 0);
+        }
+    }
+    if (lbl_queue)         lv_obj_set_style_text_color(lbl_queue,         accent, 0);
+    if (lbl_sync_progress) lv_obj_set_style_text_color(lbl_sync_progress, accent, 0);
+    if (lbl_prompt)        lv_obj_set_style_text_color(lbl_prompt,        accent, 0);
+    if (lbl_wifi)          lv_obj_set_style_text_color(lbl_wifi,          accent, 0);
+
+    // Queue screen
+    if (lbl_queue_header) {
+        lv_obj_set_style_text_color(lbl_queue_header, accent, 0);
+        lv_obj_set_style_text_font(lbl_queue_header, font_header, 0);
+    }
+    if (btn_play) {
+        lv_obj_set_style_text_color(btn_play, accent, 0);
+        lv_obj_set_style_text_font(btn_play, font_list, 0);
+    }
+    if (btn_delete) {
+        lv_obj_set_style_text_color(btn_delete, accent, 0);
+        lv_obj_set_style_text_font(btn_delete, font_list, 0);
+    }
+    if (lbl_playback_time) {
+        lv_obj_set_style_text_color(lbl_playback_time, accent, 0);
+        lv_obj_set_style_text_font(lbl_playback_time, font_small, 0);
+    }
+
+    // Recording screen
+    if (lbl_rec_time) {
+        lv_obj_set_style_text_color(lbl_rec_time, accent, 0);
+        lv_obj_set_style_text_font(lbl_rec_time, font_clock, 0);
+    }
+    if (lbl_rec_hint) {
+        lv_obj_set_style_text_color(lbl_rec_hint, accent, 0);
+        lv_obj_set_style_text_font(lbl_rec_hint, font_small, 0);
+    }
+    if (obj_pulse) lv_obj_set_style_bg_color(obj_pulse, accent, 0);
+    if (bar_vu)    lv_obj_set_style_bg_color(bar_vu, accent, LV_PART_INDICATOR);
+
+    // Playback bar accent
+    if (bar_playback) lv_obj_set_style_bg_color(bar_playback, accent, LV_PART_INDICATOR);
+
+    // Force a full redraw
+    lv_obj_invalidate(lv_scr_act());
+
+    lvgl_port_unlock();
 }
 
 static esp_err_t init_i2c(void) {
@@ -743,6 +1117,7 @@ esp_err_t display_init(void) {
     lvgl_port_lock(0);
 
     init_styles();
+    create_settings_screen();
     create_idle_screen();
     create_recording_screen();
     create_queue_screen();
@@ -772,7 +1147,13 @@ void display_show_screen(screen_id_t screen) {
 void display_update_time(int hour, int min) {
     if (!display_ready || !lbl_time) return;
     lvgl_port_lock(0);
-    lv_label_set_text_fmt(lbl_time, "%02d:%02d", hour, min);
+    if (settings_get()->clock_24h) {
+        lv_label_set_text_fmt(lbl_time, "%02d:%02d", hour, min);
+    } else {
+        int h12 = hour % 12;
+        if (h12 == 0) h12 = 12;
+        lv_label_set_text_fmt(lbl_time, "%d:%02d %s", h12, min, hour < 12 ? "AM" : "PM");
+    }
     lvgl_port_unlock();
 }
 
@@ -801,8 +1182,10 @@ void display_update_queue_badge(int count) {
     lvgl_port_lock(0);
     if (count > 0) {
         lv_label_set_text_fmt(lbl_queue, "%d memo%s queued", count, count > 1 ? "s" : "");
+        if (ambient_clock_active) set_ambient_mode(false);
     } else {
         lv_label_set_text(lbl_queue, "");
+        if (!ambient_clock_active) set_ambient_mode(true);
     }
     lvgl_port_unlock();
 }
