@@ -108,7 +108,9 @@ static esp_err_t es8311_configure(void)
     es_write(REG_ADC_18, 0x02);  /* EQ bypass (flat response) */
     es_write(REG_ADC_PGA, s_mic_gain);
     es_write(REG_ADC_VOL, 0x6A); /* ADC EQ bypass + DC offset cancel (from esp-bsp reference) */
-    es_write(REG_DAC_31,  0x00); /* DAC digital power on (0x60 mutes DSM+DEM, silences I2S SDOUT) */
+    es_write(REG_DAC_31,  0x00); /* DAC digital power on (0x60 mutes DSM+DEM) */
+    es_write(REG_DAC_VOL, 0xEF); /* ~-6dB (0xFF=0dB, 0x00=-96dB, step=0.376dB/step) */
+    es_write(REG_DAC_35,  0x20); /* Moderate ramp for pop suppression */
     es_write(REG_DAC_37,  0x08); /* Normal DAC path */
 
     vTaskDelay(pdMS_TO_TICKS(50));  /* Analog settling — allow for full register-loss recovery */
@@ -152,7 +154,7 @@ esp_err_t es8311_enable_dac(void)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
     es_write(REG_DAC_31, 0x00);  /* DAC power on (0x60 mutes DSM+DEM!) */
-    es_write(REG_DAC_VOL, 0x00); /* 0 dB */
+    es_write(REG_DAC_VOL, 0xEF); /* ~-6dB (0xFF=0dB, 0x00=-96dB, step=0.376dB/step) */
     es_write(REG_DAC_35, 0x20);  /* Moderate ramp (pop suppression) */
     es_write(REG_SYS_14, 0x1A);  /* Enable analog MIC + PGA */
     ESP_LOGI(TAG, "DAC enabled");
@@ -162,7 +164,7 @@ esp_err_t es8311_enable_dac(void)
 esp_err_t es8311_mute_dac(bool mute)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
-    return es_write(REG_DAC_VOL, mute ? 0xC0 : 0x00);
+    return es_write(REG_DAC_VOL, mute ? 0x00 : 0xEF);  /* 0xEF=~-6dB, 0x00=-96dB */
 }
 
 esp_err_t es8311_suspend(void)
@@ -182,13 +184,19 @@ esp_err_t es8311_resume(void)
 
     /* Read back key registers to verify I2C writes took effect */
     uint8_t chip_id = 0, clk6 = 0, clk8 = 0, sys14 = 0, adc15 = 0, adc17 = 0;
+    uint8_t dac31 = 0, dac_vol = 0;
     es_read(REG_CHIPID1, &chip_id);
     es_read(REG_CLK6,    &clk6);
     es_read(REG_CLK8,    &clk8);
     es_read(REG_SYS_14,  &sys14);
     es_read(REG_ADC_15,  &adc15);
     es_read(REG_ADC_17,  &adc17);
-    ESP_LOGI(TAG, "ES8311 resumed — id=0x%02X CLK6=0x%02X CLK8=0x%02X SYS14=0x%02X ADC15=0x%02X ADC17=0x%02X",
-             chip_id, clk6, clk8, sys14, adc15, adc17);
+    es_read(REG_DAC_31,  &dac31);
+    es_read(REG_DAC_VOL, &dac_vol);
+    ESP_LOGI(TAG, "ES8311 resumed — id=0x%02X CLK6=0x%02X CLK8=0x%02X SYS14=0x%02X ADC15=0x%02X ADC17=0x%02X DAC31=0x%02X DACVOL=0x%02X",
+             chip_id, clk6, clk8, sys14, adc15, adc17, dac31, dac_vol);
+    if (dac31 != 0x00) {
+        ESP_LOGE(TAG, "DAC31 not cleared! DAC may be muted (expected 0x00, got 0x%02X)", dac31);
+    }
     return ESP_OK;
 }

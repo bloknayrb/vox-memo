@@ -541,6 +541,7 @@ static void create_sync_screen(void) {
 }
 
 static esp_err_t init_i2c(void) {
+    if (i2c_handle) return ESP_OK;  // already initialized — reuse existing bus
     i2c_master_bus_config_t i2c_bus_conf = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .sda_io_num = BSP_I2C_SDA,
@@ -634,6 +635,50 @@ static lv_display_t *init_lvgl_display(void) {
 static esp_err_t init_touch(void) {
     ESP_RETURN_ON_ERROR(init_i2c(), TAG, "I2C init failed");
 
+    /* Enable AXP2101 ALDO1+ALDO2 at 3.3V — these LDOs power the FT3168 touch
+     * controller and are OFF by default after a cold boot. AXP2101 is normally
+     * init'd after display_init(), so we do the minimal enable here directly. */
+    i2c_master_dev_handle_t axp_temp = NULL;
+    const i2c_device_config_t axp_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x34,
+        .scl_speed_hz = 400000,
+    };
+    if (i2c_master_bus_add_device(i2c_handle, &axp_cfg, &axp_temp) == ESP_OK) {
+        uint8_t buf[2];
+        esp_err_t wr;
+        buf[0] = 0x92; buf[1] = 0x1C;  /* ALDO1 = 3.3V */
+        wr = i2c_master_transmit(axp_temp, buf, 2, 100);
+        ESP_LOGI(TAG, "AXP ALDO1 volt write: %s", esp_err_to_name(wr));
+        buf[0] = 0x93; buf[1] = 0x1C;  /* ALDO2 = 3.3V */
+        wr = i2c_master_transmit(axp_temp, buf, 2, 100);
+        ESP_LOGI(TAG, "AXP ALDO2 volt write: %s", esp_err_to_name(wr));
+        uint8_t reg90 = 0;
+        uint8_t reg90_addr = 0x90;
+        esp_err_t rd = i2c_master_transmit_receive(axp_temp, &reg90_addr, 1, &reg90, 1, 100);
+        ESP_LOGI(TAG, "AXP reg0x90 read: %s val=0x%02X", esp_err_to_name(rd), reg90);
+        buf[0] = 0x90; buf[1] = reg90 | 0x03;  /* Set ALDO1+ALDO2, preserve others */
+        wr = i2c_master_transmit(axp_temp, buf, 2, 100);
+        ESP_LOGI(TAG, "AXP ALDO enable write (0x%02X): %s", buf[1], esp_err_to_name(wr));
+        i2c_master_bus_rm_device(axp_temp);
+
+        /* Poll until FT3168 ACKs on I2C instead of a blind delay.
+         * This confirms power is up AND the chip is ready. */
+        ESP_LOGI(TAG, "Waiting for FT3168 at 0x38...");
+        esp_err_t probe = ESP_ERR_NOT_FOUND;
+        for (int ms = 0; ms < 5000 && probe != ESP_OK; ms += 50) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            probe = i2c_master_probe(i2c_handle, 0x38, 20);
+        }
+        if (probe == ESP_OK) {
+            ESP_LOGI(TAG, "FT3168 responded on I2C");
+        } else {
+            ESP_LOGE(TAG, "FT3168 never responded after 5s — power or address issue");
+        }
+    } else {
+        ESP_LOGW(TAG, "Could not reach AXP2101 — touch may fail");
+    }
+
     const esp_lcd_touch_config_t tp_cfg = {
         .x_max = DISP_WIDTH,
         .y_max = DISP_HEIGHT,
@@ -685,8 +730,13 @@ esp_err_t display_init(void) {
     // 3. Initialize touch (needs I2C + LVGL display)
     esp_err_t touch_ret = init_touch();
     if (touch_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Touch init failed (%s) — display will work without touch",
-                 esp_err_to_name(touch_ret));
+        ESP_LOGW(TAG, "Touch init failed (%s) — retrying in 2s", esp_err_to_name(touch_ret));
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        touch_ret = init_touch();
+        if (touch_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Touch init failed again (%s) — display will work without touch",
+                     esp_err_to_name(touch_ret));
+        }
     }
 
     // 4. Create LVGL screens (must hold the port lock)

@@ -23,6 +23,14 @@
 
 static const char *TAG = "audio";
 
+/* GPIO6 = PA_CTRL — direct speaker amplifier enable (active high) */
+#define AUDIO_PA_CTRL_GPIO  GPIO_NUM_6
+
+static void pa_enable(bool on)
+{
+    gpio_set_level(AUDIO_PA_CTRL_GPIO, on ? 1 : 0);
+}
+
 /* XCA9554 I2C I/O expander — controls speaker PA enable on pin 7 */
 #define XCA9554_I2C_ADDR  0x20
 static i2c_master_dev_handle_t xca9554_dev = NULL;
@@ -206,6 +214,17 @@ esp_err_t audio_init(void) {
              AUDIO_I2S_DIN, din_level ? "HIGH (floating/no signal)" : "LOW (actively driven)");
     gpio_set_pull_mode(AUDIO_I2S_DIN, GPIO_FLOATING);
 
+    // Configure PA GPIO — keep low (off) until playback starts
+    gpio_config_t pa_cfg = {
+        .pin_bit_mask = (1ULL << AUDIO_PA_CTRL_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&pa_cfg);
+    pa_enable(false);
+
     // Configure I2S standard mode for both TX (speaker) and RX (mic).
     // STEREO mode matches the ES8311 hardware output — recording extracts left channel only.
     // ESP32 is I2S master: drives MCLK (4.096 MHz), BCLK (512kHz), WS (16kHz) to ES8311 slave.
@@ -385,8 +404,22 @@ static void playback_task(void *arg) {
     playback_bytes_played = 0;
     fseek(f, sizeof(wav_header_t), SEEK_SET);
 
-    ESP_LOGI(TAG, "Playback started: %s", playback_path);
+    ESP_LOGI(TAG, "Playback file opened: %s, total=%lu bytes", playback_path, (unsigned long)playback_bytes_total);
 
+    // Quick RMS check on first chunk to verify recording has content
+    {
+        size_t n = fread(mono_buf, 1, sizeof(mono_buf), f);
+        if (n > 0) {
+            int64_t sum = 0;
+            const int16_t *s = (const int16_t *)mono_buf;
+            for (size_t i = 0; i < n / 2; i++) sum += (int64_t)s[i] * s[i];
+            int rms = (int)sqrtf((float)(sum / (n / 2)));
+            ESP_LOGI(TAG, "First chunk RMS: %d (0=silent, >500=has content)", rms);
+        }
+        fseek(f, sizeof(wav_header_t), SEEK_SET);  // rewind to start of audio
+    }
+
+    bool first_chunk = true;
     while (playing && !stop_playback) {
         size_t bytes_read = fread(mono_buf, 1, sizeof(mono_buf), f);
         if (bytes_read == 0) break;  // EOF
@@ -403,6 +436,10 @@ static void playback_task(void *arg) {
         size_t stereo_bytes = (size_t)samples * 4;
 
         esp_err_t ret = i2s_channel_write(tx_chan, stereo_buf, stereo_bytes, &bytes_written, pdMS_TO_TICKS(200));
+        if (first_chunk) {
+            ESP_LOGI(TAG, "First I2S write: ret=%s, written=%u", esp_err_to_name(ret), (unsigned)bytes_written);
+            first_chunk = false;
+        }
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "I2S write error: %s", esp_err_to_name(ret));
             break;
@@ -410,7 +447,14 @@ static void playback_task(void *arg) {
     }
 
     fclose(f);
+
+    /* Write one buffer of silence to flush DMA pipeline before disabling */
+    memset(stereo_buf, 0, sizeof(stereo_buf));
+    i2s_channel_write(tx_chan, stereo_buf, sizeof(stereo_buf), &bytes_written, pdMS_TO_TICKS(500));
+
+    i2s_channel_disable(rx_chan);
     i2s_channel_disable(tx_chan);
+    pa_enable(false);
     es8311_mute_dac(true);
     es8311_suspend();
     playing = false;
@@ -437,8 +481,10 @@ esp_err_t audio_play(const char *filename) {
         return codec_err;
     }
     es8311_mute_dac(false);
-    vTaskDelay(pdMS_TO_TICKS(20));  // DAC settling time
+    pa_enable(true);
+    vTaskDelay(pdMS_TO_TICKS(20));  // DAC + PA settling time
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_chan));  // duplex: both channels share clock
 
     // Drain any stale semaphore signal before starting
     xSemaphoreTake(play_done_sem, 0);
