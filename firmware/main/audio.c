@@ -94,7 +94,7 @@ typedef struct __attribute__((packed)) {
     uint32_t data_size;     // actual audio data size
 } wav_header_t;
 
-static void write_wav_header(FILE *f, uint32_t data_size) {
+static bool write_wav_header(FILE *f, uint32_t data_size) {
     wav_header_t hdr = {
         .riff = "RIFF",
         .file_size = data_size + sizeof(wav_header_t) - 8,
@@ -110,8 +110,8 @@ static void write_wav_header(FILE *f, uint32_t data_size) {
         .data = "data",
         .data_size = data_size,
     };
-    fseek(f, 0, SEEK_SET);
-    fwrite(&hdr, sizeof(hdr), 1, f);
+    if (fseek(f, 0, SEEK_SET) != 0) return false;
+    return fwrite(&hdr, sizeof(hdr), 1, f) == 1;
 }
 
 static void recording_task(void *arg) {
@@ -177,7 +177,9 @@ static void recording_task(void *arg) {
             ESP_LOGW(TAG, "Recording discarded (too short): %s (%lu bytes)",
                      rec_filepath, (unsigned long)rec_bytes_written);
         } else {
-            write_wav_header(rec_file, rec_bytes_written);
+            if (!write_wav_header(rec_file, rec_bytes_written)) {
+                ESP_LOGE(TAG, "WAV header write failed, file may be corrupt: %s", rec_filepath);
+            }
             fclose(rec_file);
             rec_file = NULL;
             last_rec_discarded = false;
@@ -318,7 +320,13 @@ esp_err_t audio_start_recording(void) {
     // Write placeholder WAV header (will be updated on stop)
     rec_bytes_written = 0;
     rec_storage_full = false;
-    write_wav_header(rec_file, 0);
+    if (!write_wav_header(rec_file, 0)) {
+        ESP_LOGE(TAG, "Failed to write initial WAV header");
+        fclose(rec_file);
+        rec_file = NULL;
+        remove(rec_filepath);
+        return ESP_FAIL;
+    }
 
     esp_err_t codec_err = es8311_resume();
     if (codec_err != ESP_OK) {
@@ -556,6 +564,10 @@ char **audio_list_memos(int *count) {
     }
 
     char **list = malloc(n * sizeof(char *));
+    if (!list) {
+        closedir(dir);
+        return NULL;
+    }
     rewinddir(dir);
 
     int i = 0;
@@ -565,6 +577,13 @@ char **audio_list_memos(int *count) {
             char path[280];  // MEMO_BASE_PATH(7) + "/" + NAME_MAX(255) + NUL
             snprintf(path, sizeof(path), MEMO_BASE_PATH "/%s", entry->d_name);
             list[i] = strdup(path);
+            if (!list[i]) {
+                // Free already-allocated entries and bail
+                for (int j = 0; j < i; j++) free(list[j]);
+                free(list);
+                closedir(dir);
+                return NULL;
+            }
             i++;
         }
     }

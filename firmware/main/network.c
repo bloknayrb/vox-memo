@@ -237,6 +237,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
 }
 
 static esp_err_t probe_ip(const char *ip) {
+    http_response_len = 0;
     char url[64];
     snprintf(url, sizeof(url), "http://%s:%d/health", ip, SERVER_PORT);
     esp_http_client_config_t config = {
@@ -303,6 +304,9 @@ esp_err_t network_upload_memo(const char *filepath, char *title_out, size_t titl
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
     esp_http_client_set_header(client, "Content-Type", "audio/wav");
+#ifdef SERVER_API_KEY
+    esp_http_client_set_header(client, "X-API-Key", SERVER_API_KEY);
+#endif
     // Strip .wav extension for timestamp header
     char ts_header[32] = {0};
     const char *dot = strrchr(fname, '.');
@@ -431,6 +435,13 @@ void network_sync_task(void *arg) {
                 snprintf(status_buf, sizeof(status_buf), "Syncing %d/%d...", i + 1, count);
             }
             display_update_sync_status(status_buf);
+
+            // Skip if user is currently playing back this memo
+            if (audio_is_playing()) {
+                ESP_LOGI(TAG, "Skipping %s — playback in progress", memos[i]);
+                free(memos[i]);
+                continue;
+            }
 
             char title[64] = {0};
             esp_err_t err = network_upload_memo(memos[i], title, sizeof(title));

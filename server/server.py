@@ -4,6 +4,7 @@ import array
 import json
 import math
 import os
+import struct
 import tempfile
 import wave
 from datetime import datetime, timezone
@@ -116,6 +117,10 @@ def write_memo(timestamp: datetime, title: str, content: str, tags: list[str]) -
 @app.post("/memo")
 async def receive_memo(request: Request):
     """Receive WAV audio from ESP32, transcribe, cleanup, save to Obsidian."""
+    # Reject unauthorized requests when an API key is configured
+    if config.API_KEY and request.headers.get("X-API-Key") != config.API_KEY:
+        return Response(status_code=401, content="Unauthorized")
+
     # Parse timestamp from header or use now
     ts_header = request.headers.get("X-Memo-Timestamp", "")
     try:
@@ -157,6 +162,9 @@ async def receive_memo(request: Request):
         except OpenAIError as e:
             print(f"Transcription error: {e}")
             return Response(status_code=503, content="Transcription service unavailable")
+        except (wave.Error, struct.error, Exception) as e:
+            print(f"Invalid audio file: {e}")
+            return Response(status_code=422, content="Invalid audio file")
         if raw_text is None:
             return {"status": "silent", "title": "", "preview": "", "filename": ""}
         if not raw_text.strip():
@@ -164,7 +172,11 @@ async def receive_memo(request: Request):
 
         # Step 2: Write raw transcription immediately (safety net)
         raw_title = f"Voice Memo {ts_slug}"
-        raw_path = write_memo(timestamp, raw_title, raw_text, ["vox-memo", "raw"])
+        try:
+            raw_path = write_memo(timestamp, raw_title, raw_text, ["vox-memo", "raw"])
+        except OSError as e:
+            print(f"Storage write failed: {e}")
+            return Response(status_code=507, content="Storage unavailable")
 
         # Step 3: LLM cleanup (overwrites raw if successful)
         cleaned = cleanup(raw_text)
@@ -175,8 +187,14 @@ async def receive_memo(request: Request):
             if "vox-memo" not in tags:
                 tags.insert(0, "vox-memo")
             # Write clean version first, then remove raw (order matters: if write fails, raw survives)
-            final_path = write_memo(timestamp, title, content, tags)
-            raw_path.unlink()
+            try:
+                final_path = write_memo(timestamp, title, content, tags)
+                raw_path.unlink()
+            except OSError as e:
+                print(f"Storage write failed during cleanup: {e}")
+                title = raw_title
+                content = raw_text
+                final_path = raw_path
         else:
             title = raw_title
             content = raw_text

@@ -11,6 +11,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Copy application code
 COPY server.py config.py ./
 
+RUN adduser --system --no-create-home appuser
+USER appuser
+
 EXPOSE 8000
 
 CMD ["uv", "run", "python", "server.py"]

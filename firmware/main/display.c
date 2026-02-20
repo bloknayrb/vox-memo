@@ -1360,7 +1360,7 @@ void display_wake(void) {
     esp_lcd_panel_io_tx_param(io_handle, 0x11, NULL, 0);  // SLPOUT
     vTaskDelay(pdMS_TO_TICKS(120));  // Wait for oscillator stabilize
     esp_lcd_panel_disp_on_off(panel_handle, true);         // DISPON
-    display_set_brightness(0xFF);
+    display_set_brightness(settings_get()->brightness);
     display_sleeping = false;
     display_dimmed = false;
     inactivity_seconds = 0;
@@ -1388,7 +1388,7 @@ void display_note_activity(void) {
         display_wake();
     } else if (display_dimmed) {
         display_dimmed = false;
-        display_set_brightness(0xFF);
+        display_set_brightness(settings_get()->brightness);
     }
 }
 

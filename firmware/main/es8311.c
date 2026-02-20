@@ -93,29 +93,34 @@ static esp_err_t es8311_configure(void)
     /* System power-up */
     ESP_RETURN_ON_ERROR(es_write(REG_SYS_D,  0x01), TAG, "Power-up failed");
     vTaskDelay(pdMS_TO_TICKS(10));
-    es_write(REG_SYS_E,  0x02);  /* Enable analog PGA + ADC modulator */
-    es_write(REG_SYS_F,  0x00);  /* 3.3V reference */
-    es_write(REG_SYS_10, 0x1F);  /* All clock enables: ADC+DAC+reference clocks */
-    es_write(REG_SYS_11, 0x7F);  /* HP voltage reference — needed for analog bias */
-    es_write(REG_SYS_12, 0x00);  /* LDO 1.35V */
-    es_write(REG_SYS_13, 0x10);  /* HP off */
-    es_write(REG_SYS_14, 0x1A);  /* Enable analog MIC input + PGA (was 0xBF — mic path was never connected!) */
+
+    esp_err_t ret = ESP_OK;
+    ret |= es_write(REG_SYS_E,  0x02);  /* Enable analog PGA + ADC modulator */
+    ret |= es_write(REG_SYS_F,  0x00);  /* 3.3V reference */
+    ret |= es_write(REG_SYS_10, 0x1F);  /* All clock enables: ADC+DAC+reference clocks */
+    ret |= es_write(REG_SYS_11, 0x7F);  /* HP voltage reference — needed for analog bias */
+    ret |= es_write(REG_SYS_12, 0x00);  /* LDO 1.35V */
+    ret |= es_write(REG_SYS_13, 0x10);  /* HP off */
+    ret |= es_write(REG_SYS_14, 0x1A);  /* Enable analog MIC input + PGA (was 0xBF — mic path was never connected!) */
 
     /* ADC path: analog mic (AMIC) mode, ADC on.
      * Matches esp-bsp es8311_microphone_config(handle, false). */
-    es_write(REG_ADC_15, 0x00);  /* ADC on, AMIC mode */
-    es_write(REG_ADC_16, s_mic_gain);  /* MIC gain via esp-bsp register (0-7, 6dB steps) */
-    es_write(REG_ADC_17, 0xC8);  /* ADC gain / ramp config (was 0x00) */
-    es_write(REG_ADC_18, 0x02);  /* EQ bypass (flat response) */
-    es_write(REG_ADC_PGA, s_mic_gain);
-    es_write(REG_ADC_VOL, 0x6A); /* ADC EQ bypass + DC offset cancel (from esp-bsp reference) */
-    es_write(REG_DAC_31,  0x00); /* DAC digital power on (0x60 mutes DSM+DEM) */
-    es_write(REG_DAC_VOL, 0xEF); /* ~-6dB (0xFF=0dB, 0x00=-96dB, step=0.376dB/step) */
-    es_write(REG_DAC_35,  0x20); /* Moderate ramp for pop suppression */
-    es_write(REG_DAC_37,  0x08); /* Normal DAC path */
+    ret |= es_write(REG_ADC_15, 0x00);  /* ADC on, AMIC mode */
+    ret |= es_write(REG_ADC_16, s_mic_gain);  /* MIC gain via esp-bsp register (0-7, 6dB steps) */
+    ret |= es_write(REG_ADC_17, 0xC8);  /* ADC gain / ramp config (was 0x00) */
+    ret |= es_write(REG_ADC_18, 0x02);  /* EQ bypass (flat response) */
+    ret |= es_write(REG_ADC_PGA, s_mic_gain);
+    ret |= es_write(REG_ADC_VOL, 0x6A); /* ADC EQ bypass + DC offset cancel (from esp-bsp reference) */
+    ret |= es_write(REG_DAC_31,  0x00); /* DAC digital power on (0x60 mutes DSM+DEM) */
+    ret |= es_write(REG_DAC_VOL, 0xEF); /* ~-6dB (0xFF=0dB, 0x00=-96dB, step=0.376dB/step) */
+    ret |= es_write(REG_DAC_35,  0x20); /* Moderate ramp for pop suppression */
+    ret |= es_write(REG_DAC_37,  0x08); /* Normal DAC path */
 
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "One or more register writes failed during configure");
+    }
     vTaskDelay(pdMS_TO_TICKS(50));  /* Analog settling — allow for full register-loss recovery */
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t es8311_init(i2c_master_bus_handle_t i2c_bus, uint8_t mic_gain)

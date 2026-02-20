@@ -58,8 +58,21 @@ static void handle_list(void)
     usb_write_str("END\n");
 }
 
+static bool is_safe_filename(const char *name)
+{
+    if (!name || *name == '\0') return false;
+    if (strstr(name, "..") != NULL) return false;
+    if (strchr(name, '/') != NULL) return false;
+    if (strchr(name, '\\') != NULL) return false;
+    return true;
+}
+
 static void handle_get(const char *filename)
 {
+    if (!is_safe_filename(filename)) {
+        usb_write_str("ERR Invalid filename\n");
+        return;
+    }
     char path[280];
     snprintf(path, sizeof(path), MEMO_BASE_PATH "/%s", filename);
 
@@ -116,6 +129,10 @@ static void handle_get(const char *filename)
 
 static void handle_delete(const char *filename)
 {
+    if (!is_safe_filename(filename)) {
+        usb_write_str("ERR Invalid filename\n");
+        return;
+    }
     char path[280];
     snprintf(path, sizeof(path), MEMO_BASE_PATH "/%s", filename);
 

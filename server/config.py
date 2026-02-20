@@ -14,6 +14,7 @@ ARCHIVE_AUDIO = True  # keep WAV files alongside markdown
 # Server
 HOST = "0.0.0.0"
 PORT = 8000
+API_KEY = os.environ.get("API_KEY", "")  # Optional: reject requests without matching X-API-Key header
 
 # Recording limits (sent to ESP32 on handshake)
 MAX_MEMO_DURATION_SECONDS = 120
