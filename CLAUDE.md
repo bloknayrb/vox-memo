@@ -18,11 +18,16 @@
 
 ## Firmware Architecture (firmware/main/)
 - `audio.c/h` — I2S record/playback, LittleFS memo storage, ES8311 codec control
-- `display.c/h` — LVGL screens (idle, recording, queue, sync_confirm), screen transitions
+- `display.c/h` — LVGL screens (idle, recording, queue, sync_confirm, settings), gestures, ambient clock mode
 - `touch.c/h` — Touch polling, button press handling, gesture detection
 - `es8311.c/h` — Low-level I2C register driver for ES8311 audio codec
-- `wifi.c/h` — WiFi STA connection, HTTP sync to server
+- `network.c/h` — Multi-SSID WiFi STA, HTTP sync to server, settings-driven sync interval
+- `settings.c/h` — NVS-backed user preferences (sync interval, volume, brightness, accent color, clock format, font size)
+- `axp2101.c/h` — AXP2101 PMIC driver (battery SOC, VBUS detection, charging)
+- `usb_sync.c/h` — USB Serial/JTAG memo transfer protocol (LIST/GET/DELETE/PING + CRC32)
 - Memos stored in LittleFS at `/memos/YYYYMMDD_HHMMSS.wav`
+- **Navigation**: Settings ←swipe→ Idle ←swipe→ Queue
+- Boot button (GPIO9): short tap = sync, long press = record
 
 ## Server (server/)
 - Python (uv), receives WAV → OpenAI Whisper transcription → gpt-4o-mini cleanup → saves .md to Obsidian inbox
