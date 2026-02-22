@@ -1341,6 +1341,10 @@ void *display_get_i2c_handle(void) {
 
 void display_sleep(void) {
     if (!display_ready || display_sleeping) return;
+    // Pause LVGL rendering before SLPIN — SPI LCD has no PM lock, flushes must stop
+    lvgl_port_lock(0);
+    if (lvgl_disp) lv_display_enable(lvgl_disp, false);
+    lvgl_port_unlock();
     esp_lcd_panel_disp_on_off(panel_handle, false);       // DISPOFF
     esp_lcd_panel_io_tx_param(io_handle, 0x10, NULL, 0);  // SLPIN
     vTaskDelay(pdMS_TO_TICKS(120));  // SH8601 spec: >=120ms after SLPIN
@@ -1357,8 +1361,9 @@ void display_wake(void) {
     display_sleeping = false;
     display_dimmed = false;
     inactivity_seconds = 0;
-    // Force a full redraw so the screen content is restored
+    // Re-enable LVGL rendering and force full redraw to restore screen content
     lvgl_port_lock(0);
+    if (lvgl_disp) lv_display_enable(lvgl_disp, true);
     lv_obj_invalidate(lv_scr_act());
     lvgl_port_unlock();
     ESP_LOGI(TAG, "Display waking");
