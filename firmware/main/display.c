@@ -1341,6 +1341,9 @@ void *display_get_i2c_handle(void) {
 
 void display_sleep(void) {
     if (!display_ready || display_sleeping) return;
+    if (current_screen == SCREEN_SETTINGS) {
+        settings_save();
+    }
     // Pause LVGL rendering before SLPIN — SPI LCD has no PM lock, flushes must stop
     lvgl_port_lock(0);
     if (lvgl_disp) lv_display_enable(lvgl_disp, false);
