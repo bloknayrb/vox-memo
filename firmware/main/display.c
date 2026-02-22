@@ -197,6 +197,7 @@ static void gesture_event_cb(lv_event_t *e) {
     } else if (scr == screens[SCREEN_QUEUE] && dir == LV_DIR_RIGHT) {
         display_show_screen(SCREEN_IDLE);
     } else if (scr == screens[SCREEN_SETTINGS] && dir == LV_DIR_LEFT) {
+        settings_save();  // batch all settings changes to a single NVS write on exit
         display_show_screen(SCREEN_IDLE);
     }
 }
@@ -596,7 +597,6 @@ static void create_sync_screen(void) {
 static void settings_sync_btn_cb(lv_event_t *e) {
     uint32_t secs = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     settings_get()->sync_interval_s = secs;
-    settings_save();
     // Highlight selected button, dim others
     static const uint32_t SYNC_SECS[4] = {15, 30, 60, 0};
     for (int i = 0; i < 4; i++) {
@@ -611,7 +611,6 @@ static void settings_vol_dec_cb(lv_event_t *e) {
     (void)e;
     app_settings_t *s = settings_get();
     if (s->volume >= 16) s->volume -= 16; else s->volume = 0;
-    settings_save();
     es8311_set_dac_volume(s->volume);
     if (lbl_vol_pct) lv_label_set_text_fmt(lbl_vol_pct, "%d%%", (s->volume * 100) / 255);
 }
@@ -620,7 +619,6 @@ static void settings_vol_inc_cb(lv_event_t *e) {
     (void)e;
     app_settings_t *s = settings_get();
     if (s->volume <= 239) s->volume += 16; else s->volume = 255;
-    settings_save();
     es8311_set_dac_volume(s->volume);
     if (lbl_vol_pct) lv_label_set_text_fmt(lbl_vol_pct, "%d%%", (s->volume * 100) / 255);
 }
@@ -629,7 +627,6 @@ static void settings_bri_dec_cb(lv_event_t *e) {
     (void)e;
     app_settings_t *s = settings_get();
     if (s->brightness >= 48) s->brightness -= 32; else s->brightness = 32;
-    settings_save();
     display_set_brightness(s->brightness);
     if (lbl_bri_pct) lv_label_set_text_fmt(lbl_bri_pct, "%d%%", (s->brightness * 100) / 255);
 }
@@ -638,7 +635,6 @@ static void settings_bri_inc_cb(lv_event_t *e) {
     (void)e;
     app_settings_t *s = settings_get();
     if (s->brightness <= 223) s->brightness += 32; else s->brightness = 255;
-    settings_save();
     display_set_brightness(s->brightness);
     if (lbl_bri_pct) lv_label_set_text_fmt(lbl_bri_pct, "%d%%", (s->brightness * 100) / 255);
 }
@@ -646,7 +642,6 @@ static void settings_bri_inc_cb(lv_event_t *e) {
 static void settings_color_cb(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     settings_get()->accent_color = ACCENT_PRESETS[idx];
-    settings_save();
     // Update dot borders to show selection
     for (int i = 0; i < 6; i++) {
         lv_obj_set_style_border_width(settings_color_dots[i], (i == idx) ? 3 : 0, 0);
@@ -657,7 +652,6 @@ static void settings_color_cb(lv_event_t *e) {
 static void settings_clock_cb(lv_event_t *e) {
     bool is_24h = (bool)(intptr_t)lv_event_get_user_data(e);
     settings_get()->clock_24h = is_24h;
-    settings_save();
     lv_obj_set_style_bg_color(btn_clock_24h, lv_color_hex(is_24h  ? 0x2A4A3A : 0x1A1A1A), 0);
     lv_obj_set_style_bg_color(btn_clock_12h, lv_color_hex(!is_24h ? 0x2A4A3A : 0x1A1A1A), 0);
     lv_obj_set_style_border_width(btn_clock_24h, is_24h  ? 2 : 0, 0);
@@ -667,7 +661,6 @@ static void settings_clock_cb(lv_event_t *e) {
 static void settings_font_cb(lv_event_t *e) {
     bool large = (bool)(intptr_t)lv_event_get_user_data(e);
     settings_get()->font_large = large;
-    settings_save();
     lv_obj_set_style_bg_color(btn_font_large,  lv_color_hex(large  ? 0x2A4A3A : 0x1A1A1A), 0);
     lv_obj_set_style_bg_color(btn_font_normal, lv_color_hex(!large ? 0x2A4A3A : 0x1A1A1A), 0);
     lv_obj_set_style_border_width(btn_font_large,  large  ? 2 : 0, 0);
@@ -1348,6 +1341,10 @@ void *display_get_i2c_handle(void) {
 
 void display_sleep(void) {
     if (!display_ready || display_sleeping) return;
+    // Pause LVGL rendering before SLPIN — SPI LCD has no PM lock, flushes must stop
+    lvgl_port_lock(0);
+    if (lvgl_disp) lv_display_enable(lvgl_disp, false);
+    lvgl_port_unlock();
     esp_lcd_panel_disp_on_off(panel_handle, false);       // DISPOFF
     esp_lcd_panel_io_tx_param(io_handle, 0x10, NULL, 0);  // SLPIN
     vTaskDelay(pdMS_TO_TICKS(120));  // SH8601 spec: >=120ms after SLPIN
@@ -1364,8 +1361,9 @@ void display_wake(void) {
     display_sleeping = false;
     display_dimmed = false;
     inactivity_seconds = 0;
-    // Force a full redraw so the screen content is restored
+    // Re-enable LVGL rendering and force full redraw to restore screen content
     lvgl_port_lock(0);
+    if (lvgl_disp) lv_display_enable(lvgl_disp, true);
     lv_obj_invalidate(lv_scr_act());
     lvgl_port_unlock();
     ESP_LOGI(TAG, "Display waking");

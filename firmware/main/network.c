@@ -77,6 +77,7 @@ static void set_wifi_config(const wifi_entry_t *entry) {
     strncpy((char *)wifi_cfg.sta.ssid, entry->ssid, sizeof(wifi_cfg.sta.ssid) - 1);
     strncpy((char *)wifi_cfg.sta.password, entry->password, sizeof(wifi_cfg.sta.password) - 1);
     wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_cfg.sta.listen_interval = 10;  // Wake every 10th beacon (~1s at typical 100ms AP interval)
     esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
 }
 
@@ -129,6 +130,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         wifi_state = WIFI_STATE_IDLE;
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
         esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+        esp_wifi_set_max_tx_power(34);  // 8.5dBm (34 × 0.25dBm) — sufficient for home WiFi
         display_update_wifi(WIFI_DISPLAY_CONNECTED, wifi_entries[wifi_entry_idx].ssid);
 
         // Set active server IP from the current WiFi entry

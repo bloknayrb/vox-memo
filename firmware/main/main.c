@@ -11,8 +11,11 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_littlefs.h"
+#include "esp_pm.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
 #include "audio.h"
@@ -60,6 +63,17 @@ void app_main(void) {
     // Load user settings from NVS (before display so brightness applies at init)
     ESP_ERROR_CHECK(settings_init());
 
+    // Enable CPU frequency scaling (DFS) + auto light sleep.
+    // NOTE: USB CDC console disconnects during light sleep (APB/USB PHY gated).
+    // For debugging while connected: add CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+    // temporarily to sdkconfig.defaults (removes it before production testing).
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = true,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+
     // Mount flash storage
     init_littlefs();
 
@@ -105,15 +119,25 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "=== Vox Memo ready ===");
 
-    // Main loop: LVGL rendering + input polling + status updates
-    uint32_t loop_count = 0;
+    // Event-driven main loop: blocks on GPIO event queue, CPU enters light sleep
+    // during the 1s wait. Status updates run at ~1Hz using wall-clock tracking.
+    QueueHandle_t evt_q = touch_get_event_queue();
     bool prev_vbus = false;
-    while (1) {
-        // Poll inputs (buttons + touch)
-        touch_poll();
+    int batt_tick = 0;
+    int64_t last_status_us = 0;
 
-        // Periodic status updates (~once per second)
-        if (loop_count % 100 == 0) {
+    while (1) {
+        uint32_t gpio_num = 0;
+        // Block up to 1s — FreeRTOS idle hook triggers auto light sleep during wait
+        if (xQueueReceive(evt_q, &gpio_num, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            touch_process_gpio_event(gpio_num);
+        }
+
+        // ~1Hz status updates (driven by wall clock, not loop count)
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_status_us >= 1000000) {
+            last_status_us = now_us;
+
             // Update clock
             time_t now;
             time(&now);
@@ -133,7 +157,9 @@ void app_main(void) {
             }
 
             // Update battery every ~10 seconds
-            if (loop_count % 1000 == 0) {
+            batt_tick++;
+            if (batt_tick >= 10) {
+                batt_tick = 0;
                 int batt = axp2101_get_battery_percent();
                 if (batt >= 0) {
                     display_update_battery(batt, axp2101_is_vbus_present());
@@ -147,13 +173,11 @@ void app_main(void) {
             }
             prev_vbus = cur_vbus;
 
-            // Advance inactivity timer (skip while recording to keep screen on)
+            // Advance inactivity timer and update recording display
+            touch_tick();
             if (!audio_is_recording()) {
                 display_tick_inactivity();
             }
         }
-
-        loop_count++;
-        vTaskDelay(pdMS_TO_TICKS(10));  // ~100Hz main loop
     }
 }

@@ -187,13 +187,18 @@ esp_err_t es8311_suspend(void)
     ESP_RETURN_ON_ERROR(es_write(REG_SYS_14, 0x00), TAG, "analog MIC suspend failed");
     ESP_RETURN_ON_ERROR(es_write(REG_ADC_15, 0x00), TAG, "ADC suspend failed");
     ESP_RETURN_ON_ERROR(es_write(REG_DAC_31, 0x60), TAG, "DAC suspend failed");
-    ESP_LOGI(TAG, "ES8311 suspended");
+    // Clear CSM (master power-on) bit → soft reset, powers down charge pump
+    ESP_RETURN_ON_ERROR(es_write(REG_RESET, 0x00), TAG, "ES8311 power-down failed");
+    ESP_LOGI(TAG, "ES8311 suspended (power-down)");
     return ESP_OK;
 }
 
 esp_err_t es8311_resume(void)
 {
     if (!dev_handle) return ESP_ERR_INVALID_STATE;
+    // Restore CSM master power-on bit before configuring (cleared by suspend power-down)
+    ESP_RETURN_ON_ERROR(es_write(REG_RESET, 0x80), TAG, "ES8311 power-on restore failed");
+    vTaskDelay(pdMS_TO_TICKS(5));
     ESP_RETURN_ON_ERROR(es8311_configure(), TAG, "Configure failed");
 
     /* Read back key registers to verify I2C writes took effect */
