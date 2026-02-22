@@ -70,7 +70,6 @@ static char selected_memo_path[280] = {0};
 static lv_obj_t *selected_btn = NULL;
 
 // Settings screen widgets
-static lv_obj_t *settings_sync_btns[4]    = {0};  // 15s / 30s / 60s / Off
 static lv_obj_t *lbl_vol_pct              = NULL;
 static lv_obj_t *lbl_bri_pct             = NULL;
 static lv_obj_t *settings_color_dots[6]  = {0};
@@ -594,19 +593,6 @@ static void create_sync_screen(void) {
 
 // --- Settings screen callbacks ---
 
-static void settings_sync_btn_cb(lv_event_t *e) {
-    uint32_t secs = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
-    settings_get()->sync_interval_s = secs;
-    // Highlight selected button, dim others
-    static const uint32_t SYNC_SECS[4] = {15, 30, 60, 0};
-    for (int i = 0; i < 4; i++) {
-        bool active = (SYNC_SECS[i] == secs);
-        lv_obj_set_style_bg_color(settings_sync_btns[i],
-            lv_color_hex(active ? 0x2A4A3A : 0x1A1A1A), 0);
-        lv_obj_set_style_border_width(settings_sync_btns[i], active ? 2 : 0, 0);
-    }
-}
-
 static void settings_vol_dec_cb(lv_event_t *e) {
     (void)e;
     app_settings_t *s = settings_get();
@@ -690,6 +676,7 @@ static lv_obj_t *make_seg_btn(lv_obj_t *parent, const char *text, int w, int h,
 
 static void create_settings_screen(void) {
     lv_obj_t *scr = screens[SCREEN_SETTINGS] = lv_obj_create(NULL);
+    lv_obj_set_scroll_dir(scr, LV_DIR_VER);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
 
     // Header
@@ -708,29 +695,7 @@ static void create_settings_screen(void) {
 
     app_settings_t *s = settings_get();
 
-    // --- Row 1: Sync interval ---
-    lv_obj_t *lbl_sync = lv_label_create(scr);
-    lv_obj_set_style_text_color(lbl_sync, lv_color_hex(0x5C997C), 0);
-    lv_obj_set_style_text_font(lbl_sync, &lv_font_montserrat_18, 0);
-    lv_label_set_text(lbl_sync, "Sync");
-    lv_obj_set_pos(lbl_sync, LBL_X, row_y + (ROW_H - 18) / 2);
-
-    static const uint32_t SYNC_SECS[4] = {15, 30, 60, 0};
-    static const char *SYNC_LABELS[4] = {"15s", "30s", "60s", "Off"};
-    int btn_w = 52, btn_h = ROW_H;
-    for (int i = 0; i < 4; i++) {
-        settings_sync_btns[i] = make_seg_btn(scr, SYNC_LABELS[i], btn_w, btn_h,
-                                             settings_sync_btn_cb,
-                                             (void *)(uintptr_t)SYNC_SECS[i]);
-        lv_obj_set_pos(settings_sync_btns[i], VAL_X + i * (btn_w + 4), row_y);
-        bool active = (SYNC_SECS[i] == s->sync_interval_s);
-        lv_obj_set_style_bg_color(settings_sync_btns[i],
-            lv_color_hex(active ? 0x2A4A3A : 0x1A1A1A), 0);
-        lv_obj_set_style_border_width(settings_sync_btns[i], active ? 2 : 0, 0);
-    }
-    row_y += ROW_GAP;
-
-    // --- Row 2: Volume stepper ---
+    // --- Row 1: Volume stepper ---
     lv_obj_t *lbl_vol = lv_label_create(scr);
     lv_obj_set_style_text_color(lbl_vol, lv_color_hex(0x5C997C), 0);
     lv_obj_set_style_text_font(lbl_vol, &lv_font_montserrat_18, 0);
@@ -779,13 +744,13 @@ static void create_settings_screen(void) {
 
     for (int i = 0; i < 6; i++) {
         lv_obj_t *dot = lv_btn_create(scr);
-        lv_obj_set_size(dot, 32, 32);
+        lv_obj_set_size(dot, 28, 28);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(dot, lv_color_hex(ACCENT_PRESETS[i]), 0);
         lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(dot, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_border_width(dot, (ACCENT_PRESETS[i] == s->accent_color) ? 3 : 0, 0);
-        lv_obj_set_pos(dot, VAL_X + i * 36, row_y + (ROW_H - 32) / 2);
+        lv_obj_set_pos(dot, VAL_X + i * 32, row_y + (ROW_H - 28) / 2);
         lv_obj_add_event_cb(dot, settings_color_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         settings_color_dots[i] = dot;
     }
@@ -1341,6 +1306,9 @@ void *display_get_i2c_handle(void) {
 
 void display_sleep(void) {
     if (!display_ready || display_sleeping) return;
+    if (current_screen == SCREEN_SETTINGS) {
+        settings_save();
+    }
     // Pause LVGL rendering before SLPIN — SPI LCD has no PM lock, flushes must stop
     lvgl_port_lock(0);
     if (lvgl_disp) lv_display_enable(lvgl_disp, false);
