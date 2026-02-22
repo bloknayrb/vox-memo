@@ -1309,10 +1309,6 @@ void display_sleep(void) {
     if (current_screen == SCREEN_SETTINGS) {
         settings_save();
     }
-    // Pause LVGL rendering before SLPIN — SPI LCD has no PM lock, flushes must stop
-    lvgl_port_lock(0);
-    if (lvgl_disp) lv_display_enable(lvgl_disp, false);
-    lvgl_port_unlock();
     esp_lcd_panel_disp_on_off(panel_handle, false);       // DISPOFF
     esp_lcd_panel_io_tx_param(io_handle, 0x10, NULL, 0);  // SLPIN
     vTaskDelay(pdMS_TO_TICKS(120));  // SH8601 spec: >=120ms after SLPIN
@@ -1329,9 +1325,8 @@ void display_wake(void) {
     display_sleeping = false;
     display_dimmed = false;
     inactivity_seconds = 0;
-    // Re-enable LVGL rendering and force full redraw to restore screen content
+    // Force full redraw to restore screen content after wake
     lvgl_port_lock(0);
-    if (lvgl_disp) lv_display_enable(lvgl_disp, true);
     lv_obj_invalidate(lv_scr_act());
     lvgl_port_unlock();
     ESP_LOGI(TAG, "Display waking");
