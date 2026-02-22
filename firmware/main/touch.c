@@ -132,6 +132,7 @@ void touch_process_gpio_event(uint32_t gpio_num) {
             display_update_recording(audio_get_recording_elapsed(), audio_get_recording_max_sec());
         }
     } else if (gpio_num == BSP_TOUCH_INT) {
+        ESP_LOGI(TAG, "GPIO15 touch event, sleeping=%d", display_is_sleeping());
         // Touch: un-dim display but do NOT wake from SLPIN (sleep wakes only via GPIO9)
         if (!display_is_sleeping()) {
             display_note_activity();

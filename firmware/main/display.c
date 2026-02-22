@@ -229,6 +229,7 @@ static void reset_delete_confirm(void);
 static void gesture_event_cb(lv_event_t *e) {
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
     lv_obj_t *scr = (lv_obj_t *)lv_event_get_current_target(e);
+    ESP_LOGI(TAG, "gesture: dir=%d scr=%p", (int)dir, (void *)scr);
 
     reset_delete_confirm();
 
@@ -464,6 +465,7 @@ static void create_idle_screen(void) {
     lv_obj_set_style_border_width(idle_status_bar, 0, 0);
     lv_obj_set_style_pad_all(idle_status_bar, 0, 0);
     lv_obj_clear_flag(idle_status_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(idle_status_bar, LV_OBJ_FLAG_CLICKABLE);
 
     lbl_wifi = lv_label_create(idle_status_bar);
     lv_obj_set_style_text_font(lbl_wifi, &lv_font_montserrat_16, 0);
@@ -486,6 +488,7 @@ static void create_idle_screen(void) {
     lv_obj_add_style(idle_clock_card, &style_card, 0);
     lv_obj_set_style_radius(idle_clock_card, 16, 0);
     lv_obj_clear_flag(idle_clock_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(idle_clock_card, LV_OBJ_FLAG_CLICKABLE);
 
     lbl_time = lv_label_create(idle_clock_card);
     lv_obj_set_style_text_color(lbl_time, accent, 0);
@@ -583,6 +586,7 @@ static void create_recording_screen(void) {
 
 static void create_queue_screen(void) {
     lv_obj_t *scr = screens[SCREEN_QUEUE] = lv_obj_create(NULL);
+    lv_obj_set_scroll_dir(scr, LV_DIR_VER);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
 
     // Header
@@ -1173,7 +1177,7 @@ static esp_err_t init_touch(void) {
         .x_max = DISP_WIDTH,
         .y_max = DISP_HEIGHT,
         .rst_gpio_num = BSP_TOUCH_RST,
-        .int_gpio_num = BSP_TOUCH_INT,
+        .int_gpio_num = GPIO_NUM_NC,   // polling mode — GPIO15 ISR owned by touch.c for activity wakeup
         .levels = {
             .reset = 0,
             .interrupt = 0,
@@ -1199,7 +1203,10 @@ static esp_err_t init_touch(void) {
         .disp = lvgl_disp,
         .handle = tp,
     };
-    lvgl_port_add_touch(&touch_cfg);
+    lv_indev_t *touch_indev = lvgl_port_add_touch(&touch_cfg);
+    if (!touch_indev) {
+        ESP_LOGE(TAG, "lvgl_port_add_touch returned NULL — no touch indev registered!");
+    }
 
     ESP_LOGI(TAG, "Touch initialized (FT3168 via FT5x06 driver)");
     return ESP_OK;

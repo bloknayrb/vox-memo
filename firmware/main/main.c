@@ -143,7 +143,10 @@ void app_main(void) {
             time(&now);
             struct tm t;
             localtime_r(&now, &t);
-            display_update_time(t.tm_hour, t.tm_min);
+            // Only update clock once SNTP has synced (year >= 2000); avoids 00:00 flash at boot
+            if (t.tm_year >= 100) {
+                display_update_time(t.tm_hour, t.tm_min);
+            }
 
             // Update Wi-Fi indicator
             if (network_is_connected()) {

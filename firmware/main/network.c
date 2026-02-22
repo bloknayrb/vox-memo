@@ -101,6 +101,15 @@ static void schedule_reconnect(void) {
     esp_timer_start_once(reconnect_timer, 2000000 /* 2s in µs */);
 }
 
+static void sntp_sync_time_cb(struct timeval *tv) {
+    time_t now = tv->tv_sec;
+    struct tm t;
+    localtime_r(&now, &t);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
+    ESP_LOGI(TAG, "SNTP synced: %s (local time)", buf);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         wifi_state = WIFI_STATE_CONNECTING;
@@ -140,10 +149,20 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 
         // Start or restart SNTP after network change
         if (!sntp_started) {
-            esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            esp_sntp_config_t sntp_cfg = {
+                .smooth_sync = false,
+                .server_from_dhcp = false,
+                .renew_servers_after_new_IP = false,
+                .index_of_first_server = 0,
+                .ip_event_to_renew = 0,
+                .sync_cb = sntp_sync_time_cb,
+                .num_of_servers = 2,
+                .servers = { "216.239.35.0",   // time.google.com — hardcoded IP bypasses DNS interception
+                             "162.159.200.1" }, // time.cloudflare.com — hardcoded IP
+            };
             esp_netif_sntp_init(&sntp_cfg);
             sntp_started = true;
-            ESP_LOGI(TAG, "SNTP time sync started");
+            ESP_LOGI(TAG, "SNTP time sync started (hardcoded IPs)");
         } else {
             esp_netif_sntp_start();
             ESP_LOGI(TAG, "SNTP restarted after network change");
