@@ -11,6 +11,7 @@
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_littlefs.h"
+#include "esp_pm.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -59,6 +60,14 @@ void app_main(void) {
 
     // Load user settings from NVS (before display so brightness applies at init)
     ESP_ERROR_CHECK(settings_init());
+
+    // Enable CPU frequency scaling (DFS): 160MHz max, 80MHz min, no light sleep yet
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = false,  // Phase 3 enables this
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
 
     // Mount flash storage
     init_littlefs();
@@ -112,8 +121,8 @@ void app_main(void) {
         // Poll inputs (buttons + touch)
         touch_poll();
 
-        // Periodic status updates (~once per second)
-        if (loop_count % 100 == 0) {
+        // Periodic status updates (~once per second at 20Hz)
+        if (loop_count % 20 == 0) {
             // Update clock
             time_t now;
             time(&now);
@@ -132,8 +141,8 @@ void app_main(void) {
                 display_update_wifi(WIFI_DISPLAY_DISCONNECTED, NULL);
             }
 
-            // Update battery every ~10 seconds
-            if (loop_count % 1000 == 0) {
+            // Update battery every ~10 seconds (200 × 50ms = 10s)
+            if (loop_count % 200 == 0) {
                 int batt = axp2101_get_battery_percent();
                 if (batt >= 0) {
                     display_update_battery(batt, axp2101_is_vbus_present());
@@ -154,6 +163,6 @@ void app_main(void) {
         }
 
         loop_count++;
-        vTaskDelay(pdMS_TO_TICKS(10));  // ~100Hz main loop
+        vTaskDelay(pdMS_TO_TICKS(50));  // ~20Hz main loop
     }
 }
