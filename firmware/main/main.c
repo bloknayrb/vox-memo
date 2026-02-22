@@ -166,10 +166,14 @@ void app_main(void) {
                 }
             }
 
-            // Detect USB plug-in → wake display
+            // Detect USB plug-in → wake display, trigger sync if memos pending
             bool cur_vbus = axp2101_is_vbus_present();
             if (cur_vbus && !prev_vbus) {
                 display_note_activity();
+                if (audio_get_memo_count() > 0) {
+                    network_wake();
+                    network_trigger_sync();
+                }
             }
             prev_vbus = cur_vbus;
 

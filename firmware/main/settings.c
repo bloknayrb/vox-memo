@@ -8,7 +8,6 @@ static const char *TAG = "settings";
 static const char *NVS_NS = "vox_settings";
 
 static app_settings_t g_settings = {
-    .sync_interval_s = 30,
     .volume          = 0xEF,
     .brightness      = 0xFF,
     .accent_color    = 0x5C997C,
@@ -31,7 +30,6 @@ esp_err_t settings_init(void) {
     uint32_t u32;
     uint8_t  u8;
 
-    if (nvs_get_u32(h, "sync_ivl",   &u32) == ESP_OK) g_settings.sync_interval_s = u32;
     if (nvs_get_u8 (h, "volume",     &u8)  == ESP_OK) g_settings.volume           = u8;
     if (nvs_get_u8 (h, "brightness", &u8)  == ESP_OK) g_settings.brightness       = u8;
     if (nvs_get_u32(h, "accent",     &u32) == ESP_OK) g_settings.accent_color     = u32;
@@ -40,8 +38,7 @@ esp_err_t settings_init(void) {
 
     nvs_close(h);
 
-    ESP_LOGI(TAG, "Settings loaded: sync=%lus vol=0x%02X bri=0x%02X accent=0x%06lX 24h=%d large=%d",
-             (unsigned long)g_settings.sync_interval_s,
+    ESP_LOGI(TAG, "Settings loaded: vol=0x%02X bri=0x%02X accent=0x%06lX 24h=%d large=%d",
              g_settings.volume, g_settings.brightness,
              (unsigned long)g_settings.accent_color,
              g_settings.clock_24h, g_settings.font_large);
@@ -60,7 +57,6 @@ void settings_save(void) {
         return;
     }
 
-    nvs_set_u32(h, "sync_ivl",   g_settings.sync_interval_s);
     nvs_set_u8 (h, "volume",     g_settings.volume);
     nvs_set_u8 (h, "brightness", g_settings.brightness);
     nvs_set_u32(h, "accent",     g_settings.accent_color);

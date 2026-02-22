@@ -1,5 +1,6 @@
 #include "network.h"
 #include "settings.h"
+#include "axp2101.h"
 
 #include "audio.h"
 #include "display.h"
@@ -403,12 +404,10 @@ void network_sync_task(void *arg) {
     ESP_LOGI(TAG, "Sync task started");
 
     while (1) {
-        // Sleep for the configured interval, or until network_trigger_sync() wakes us early.
-        // sync_interval_s == 0 means manual-only: sleep indefinitely until triggered.
-        uint32_t interval_s = settings_get()->sync_interval_s;
-        TickType_t wait = (interval_s == 0)
-            ? portMAX_DELAY
-            : pdMS_TO_TICKS((uint32_t)interval_s * 1000);
+        // Sync every 30s while charging; manual-only on battery.
+        TickType_t wait = axp2101_is_vbus_present()
+            ? pdMS_TO_TICKS(30 * 1000)
+            : portMAX_DELAY;
         ulTaskNotifyTake(pdTRUE, wait);
 
         if (!network_is_connected()) continue;
