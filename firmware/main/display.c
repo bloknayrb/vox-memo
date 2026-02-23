@@ -15,6 +15,7 @@
 #include "esp_lcd_sh8601.h"
 #include "esp_lcd_touch_ft5x06.h"
 #include "esp_lvgl_port.h"
+#include "esp_pm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
@@ -30,6 +31,7 @@ static bool display_ready = false;
 static bool display_sleeping = false;
 static bool display_dimmed = false;
 static int inactivity_seconds = 0;
+static esp_pm_lock_handle_t display_pm_lock = NULL;
 
 // Hardware handles
 static esp_lcd_panel_handle_t panel_handle = NULL;
@@ -83,6 +85,12 @@ static lv_obj_t *btn_clock_12h           = NULL;
 static lv_obj_t *btn_clock_24h           = NULL;
 static lv_obj_t *btn_font_normal         = NULL;
 static lv_obj_t *btn_font_large          = NULL;
+static lv_obj_t *lbl_settings_hdr        = NULL;
+static lv_obj_t *lbl_vol_name            = NULL;
+static lv_obj_t *lbl_bri_name            = NULL;
+static lv_obj_t *lbl_col_name            = NULL;
+static lv_obj_t *lbl_clk_name            = NULL;
+static lv_obj_t *lbl_fnt_name            = NULL;
 
 static const uint32_t ACCENT_PRESETS[6] = {
     0x5C997C,  // Sage green (default)
@@ -453,6 +461,7 @@ static void set_ambient_mode(bool active) {
 static void create_idle_screen(void) {
     lv_obj_t *scr = screens[SCREEN_IDLE] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_scroll_dir(scr, LV_DIR_VER);
 
     lv_color_t accent = lv_color_hex(settings_get()->accent_color);
@@ -542,6 +551,7 @@ static void pulse_anim_cb(void *obj, int32_t value) {
 static void create_recording_screen(void) {
     lv_obj_t *scr = screens[SCREEN_RECORDING] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     obj_pulse = lv_obj_create(scr);
     lv_obj_set_size(obj_pulse, 100, 100);
@@ -588,6 +598,7 @@ static void create_queue_screen(void) {
     lv_obj_t *scr = screens[SCREEN_QUEUE] = lv_obj_create(NULL);
     lv_obj_set_scroll_dir(scr, LV_DIR_VER);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     // Header
     lbl_queue_header = lv_label_create(scr);
@@ -672,6 +683,7 @@ static void sync_screen_tap_cb(lv_event_t *e) {
 static void create_sync_screen(void) {
     lv_obj_t *scr = screens[SCREEN_SYNC_CONFIRM] = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(scr, sync_screen_tap_cb, LV_EVENT_CLICKED, NULL);
 
@@ -774,16 +786,17 @@ static void create_settings_screen(void) {
     lv_obj_t *scr = screens[SCREEN_SETTINGS] = lv_obj_create(NULL);
     lv_obj_set_scroll_dir(scr, LV_DIR_VER);
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     app_settings_t *s = settings_get();
     lv_color_t accent = lv_color_hex(s->accent_color);
 
     // Header
-    lv_obj_t *hdr = lv_label_create(scr);
-    lv_obj_set_style_text_color(hdr, accent, 0);
-    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_22, 0);
-    lv_label_set_text(hdr, "Settings");
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 12);
+    lbl_settings_hdr = lv_label_create(scr);
+    lv_obj_set_style_text_color(lbl_settings_hdr, accent, 0);
+    lv_obj_set_style_text_font(lbl_settings_hdr, &lv_font_montserrat_22, 0);
+    lv_label_set_text(lbl_settings_hdr, "Settings");
+    lv_obj_align(lbl_settings_hdr, LV_ALIGN_TOP_MID, 0, 12);
 
     // Card layout: 320px wide, centered (x=24), vertically stacked with 8px gaps
     const int CARD_X = (DISP_WIDTH - 320) / 2;
@@ -800,7 +813,7 @@ static void create_settings_screen(void) {
     lv_obj_set_style_pad_all(vol_card, PAD, 0);
     lv_obj_clear_flag(vol_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_vol_name = lv_label_create(vol_card);
+    lbl_vol_name = lv_label_create(vol_card);
     lv_obj_set_style_text_color(lbl_vol_name, accent, 0);
     lv_obj_set_style_text_font(lbl_vol_name, &lv_font_montserrat_16, 0);
     lv_label_set_text(lbl_vol_name, "Volume");
@@ -830,7 +843,7 @@ static void create_settings_screen(void) {
     lv_obj_set_style_pad_all(bri_card, PAD, 0);
     lv_obj_clear_flag(bri_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_bri_name = lv_label_create(bri_card);
+    lbl_bri_name = lv_label_create(bri_card);
     lv_obj_set_style_text_color(lbl_bri_name, accent, 0);
     lv_obj_set_style_text_font(lbl_bri_name, &lv_font_montserrat_16, 0);
     lv_label_set_text(lbl_bri_name, "Brightness");
@@ -861,11 +874,11 @@ static void create_settings_screen(void) {
     lv_obj_set_style_pad_all(col_card, PAD, 0);
     lv_obj_clear_flag(col_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_col = lv_label_create(col_card);
-    lv_obj_set_style_text_color(lbl_col, accent, 0);
-    lv_obj_set_style_text_font(lbl_col, &lv_font_montserrat_16, 0);
-    lv_label_set_text(lbl_col, "Color");
-    lv_obj_align(lbl_col, LV_ALIGN_TOP_LEFT, 0, 0);
+    lbl_col_name = lv_label_create(col_card);
+    lv_obj_set_style_text_color(lbl_col_name, accent, 0);
+    lv_obj_set_style_text_font(lbl_col_name, &lv_font_montserrat_16, 0);
+    lv_label_set_text(lbl_col_name, "Color");
+    lv_obj_align(lbl_col_name, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // 6 color tiles, 36×36px, 8px gap → total = 6*36+5*8 = 256px
     // Center in content width (296px): start_x = (296-256)/2 = 20
@@ -897,11 +910,11 @@ static void create_settings_screen(void) {
     lv_obj_set_style_pad_all(clk_card, PAD, 0);
     lv_obj_clear_flag(clk_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_clk = lv_label_create(clk_card);
-    lv_obj_set_style_text_color(lbl_clk, accent, 0);
-    lv_obj_set_style_text_font(lbl_clk, &lv_font_montserrat_16, 0);
-    lv_label_set_text(lbl_clk, "Clock");
-    lv_obj_align(lbl_clk, LV_ALIGN_TOP_LEFT, 0, 0);
+    lbl_clk_name = lv_label_create(clk_card);
+    lv_obj_set_style_text_color(lbl_clk_name, accent, 0);
+    lv_obj_set_style_text_font(lbl_clk_name, &lv_font_montserrat_16, 0);
+    lv_label_set_text(lbl_clk_name, "Clock");
+    lv_obj_align(lbl_clk_name, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Two wide toggle buttons: (296 - 8gap) / 2 = 144px each
     btn_clock_24h = make_seg_btn(clk_card, "24h", 144, 52,
@@ -927,11 +940,11 @@ static void create_settings_screen(void) {
     lv_obj_set_style_pad_all(fnt_card, PAD, 0);
     lv_obj_clear_flag(fnt_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *lbl_fnt = lv_label_create(fnt_card);
-    lv_obj_set_style_text_color(lbl_fnt, accent, 0);
-    lv_obj_set_style_text_font(lbl_fnt, &lv_font_montserrat_16, 0);
-    lv_label_set_text(lbl_fnt, "Font");
-    lv_obj_align(lbl_fnt, LV_ALIGN_TOP_LEFT, 0, 0);
+    lbl_fnt_name = lv_label_create(fnt_card);
+    lv_obj_set_style_text_color(lbl_fnt_name, accent, 0);
+    lv_obj_set_style_text_font(lbl_fnt_name, &lv_font_montserrat_16, 0);
+    lv_label_set_text(lbl_fnt_name, "Font");
+    lv_obj_align(lbl_fnt_name, LV_ALIGN_TOP_LEFT, 0, 0);
 
     btn_font_normal = make_seg_btn(fnt_card, "Normal", 144, 52,
                                    settings_font_cb, (void *)(intptr_t)0);
@@ -960,16 +973,20 @@ void display_apply_theme(void) {
     const lv_font_t *font_clock   = s->font_large ? &lv_font_montserrat_44 : &lv_font_montserrat_36;
     const lv_font_t *font_header  = s->font_large ? &lv_font_montserrat_28 : &lv_font_montserrat_24;
     const lv_font_t *font_list    = s->font_large ? &lv_font_montserrat_22 : &lv_font_montserrat_20;
-    const lv_font_t *font_small   = s->font_large ? &lv_font_montserrat_16 : &lv_font_montserrat_18;
+    const lv_font_t *font_small   = s->font_large ? &lv_font_montserrat_20 : &lv_font_montserrat_18;
 
     lvgl_port_lock(0);
 
     // Update shared styles
     lv_style_set_text_color(&style_sage,      accent);
     lv_style_set_text_color(&style_sage_large, accent);
+    lv_style_set_text_color(&style_dim,        lv_color_hex(0x3A6B52)); // ensure dim text uses its color
     lv_style_set_text_color(&style_list_btn,   accent);
     lv_style_set_text_color(&style_action_btn, accent);
 
+    lv_style_set_text_font(&style_sage,       font_small);
+    lv_style_set_text_font(&style_sage_large, font_clock);
+    lv_style_set_text_font(&style_dim,        font_small);
     lv_style_set_text_font(&style_list_btn,   font_list);
     lv_style_set_text_font(&style_action_btn, font_list);
 
@@ -980,10 +997,18 @@ void display_apply_theme(void) {
             lv_obj_set_style_text_font(lbl_time, font_clock, 0);
         }
     }
-    // Queue pill: update bg color to new accent
-    if (lbl_queue)         lv_obj_set_style_bg_color(lbl_queue, accent, 0);
+    if (lbl_date)          lv_obj_set_style_text_font(lbl_date, font_small, 0);
+    if (lbl_wifi)          lv_obj_set_style_text_font(lbl_wifi, font_small, 0);
+    if (lbl_battery)       lv_obj_set_style_text_font(lbl_battery, font_small, 0);
+    if (lbl_queue) {
+        lv_obj_set_style_bg_color(lbl_queue, accent, 0);
+        lv_obj_set_style_text_font(lbl_queue, font_small, 0);
+    }
     if (lbl_sync_progress) lv_obj_set_style_text_color(lbl_sync_progress, accent, 0);
-    if (lbl_prompt)        lv_obj_set_style_text_color(lbl_prompt,        accent, 0);
+    if (lbl_prompt) {
+        lv_obj_set_style_text_color(lbl_prompt, accent, 0);
+        lv_obj_set_style_text_font(lbl_prompt, font_small, 0);
+    }
 
     // Queue screen
     if (lbl_queue_header) {
@@ -1027,6 +1052,22 @@ void display_apply_theme(void) {
         lv_obj_set_style_bg_color(sld_brightness, accent, LV_PART_INDICATOR);
         lv_obj_set_style_bg_color(sld_brightness, accent, LV_PART_KNOB);
     }
+
+    // Settings screen labels
+    if (lbl_settings_hdr)  lv_obj_set_style_text_font(lbl_settings_hdr, font_header, 0);
+    if (lbl_vol_name)      lv_obj_set_style_text_font(lbl_vol_name, font_small, 0);
+    if (lbl_bri_name)      lv_obj_set_style_text_font(lbl_bri_name, font_small, 0);
+    if (lbl_col_name)      lv_obj_set_style_text_font(lbl_col_name, font_small, 0);
+    if (lbl_clk_name)      lv_obj_set_style_text_font(lbl_clk_name, font_small, 0);
+    if (lbl_fnt_name)      lv_obj_set_style_text_font(lbl_fnt_name, font_small, 0);
+
+    if (lbl_vol_pct)       lv_obj_set_style_text_font(lbl_vol_pct, font_small, 0);
+    if (lbl_bri_pct)       lv_obj_set_style_text_font(lbl_bri_pct, font_small, 0);
+
+    if (btn_clock_12h)     lv_obj_set_style_text_font(btn_clock_12h, font_small, 0);
+    if (btn_clock_24h)     lv_obj_set_style_text_font(btn_clock_24h, font_small, 0);
+    if (btn_font_normal)   lv_obj_set_style_text_font(btn_font_normal, font_small, 0);
+    if (btn_font_large)    lv_obj_set_style_text_font(btn_font_large, font_small, 0);
 
     // Force a full redraw
     lv_obj_invalidate(lv_scr_act());
@@ -1246,10 +1287,17 @@ esp_err_t display_init(void) {
     create_queue_screen();
     create_sync_screen();
     lv_scr_load(screens[SCREEN_IDLE]);
+    lv_obj_set_style_bg_color(lv_layer_bottom(), lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(lv_layer_bottom(), LV_OPA_COVER, 0);
 
     lvgl_port_unlock();
 
     display_ready = true;
+
+    esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "display", &display_pm_lock);
+    if (display_pm_lock) {
+        esp_pm_lock_acquire(display_pm_lock);
+    }
 
     ESP_LOGI(TAG, "Display ready — %dx%d AMOLED", DISP_WIDTH, DISP_HEIGHT);
     ESP_LOGI(TAG, "Free heap after display init: %lu bytes",
@@ -1484,18 +1532,30 @@ void display_sleep(void) {
     if (current_screen == SCREEN_SETTINGS) {
         settings_save();
     }
+    lvgl_port_lock(0);
     esp_lcd_panel_disp_on_off(panel_handle, false);       // DISPOFF
     esp_lcd_panel_io_tx_param(io_handle, 0x10, NULL, 0);  // SLPIN
+    lvgl_port_unlock();
     vTaskDelay(pdMS_TO_TICKS(120));  // SH8601 spec: >=120ms after SLPIN
     display_sleeping = true;
+    if (display_pm_lock) {
+        esp_pm_lock_release(display_pm_lock);
+    }
     ESP_LOGI(TAG, "Display sleeping");
 }
 
 void display_wake(void) {
     if (!display_ready || !display_sleeping) return;
+    if (display_pm_lock) {
+        esp_pm_lock_acquire(display_pm_lock);
+    }
+    lvgl_port_lock(0);
     esp_lcd_panel_io_tx_param(io_handle, 0x11, NULL, 0);  // SLPOUT
+    lvgl_port_unlock();
     vTaskDelay(pdMS_TO_TICKS(120));  // Wait for oscillator stabilize
+    lvgl_port_lock(0);
     esp_lcd_panel_disp_on_off(panel_handle, true);         // DISPON
+    lvgl_port_unlock();
     display_set_brightness(settings_get()->brightness);
     display_sleeping = false;
     display_dimmed = false;
@@ -1513,9 +1573,11 @@ bool display_is_sleeping(void) {
 
 void display_set_brightness(uint8_t level) {
     if (!panel_handle) return;
+    lvgl_port_lock(0);
     // SH8601 brightness command 0x51 — set via panel IO
     uint8_t data = level;
     esp_lcd_panel_io_tx_param(io_handle, 0x51, &data, 1);
+    lvgl_port_unlock();
 }
 
 void display_note_activity(void) {
