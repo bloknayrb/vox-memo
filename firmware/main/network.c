@@ -157,6 +157,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                 .ip_event_to_renew = 0,
                 .sync_cb = sntp_sync_time_cb,
                 .num_of_servers = 2,
+                .start = true,
                 .servers = { "216.239.35.0",   // time.google.com — hardcoded IP bypasses DNS interception
                              "162.159.200.1" }, // time.cloudflare.com — hardcoded IP
             };
@@ -314,13 +315,9 @@ esp_err_t network_upload_memo(const char *filepath, char *title_out, size_t titl
     char url[64];
     snprintf(url, sizeof(url), "http://%s:%d/memo", active_server_ip, SERVER_PORT);
 
-    http_response_len = 0;
-    memset(http_response_buf, 0, sizeof(http_response_buf));
-
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .event_handler = http_event_handler,
         .timeout_ms = 30000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -375,7 +372,9 @@ esp_err_t network_upload_memo(const char *filepath, char *title_out, size_t titl
         return ESP_FAIL;
     }
 
-    // Read the response
+    // Read the response (no event handler — manual read only)
+    http_response_len = 0;
+    memset(http_response_buf, 0, sizeof(http_response_buf));
     int content_length = esp_http_client_fetch_headers(client);
     if (content_length > 0 && content_length < (int)sizeof(http_response_buf)) {
         esp_http_client_read(client, http_response_buf, content_length);
@@ -440,12 +439,17 @@ void network_sync_task(void *arg) {
         // Find server before attempting upload
         if (network_check_server() != ESP_OK) continue;
 
+        // Don't sync while a recording is in progress (partial WAV on disk)
+        if (audio_is_recording()) continue;
+
         int count = 0;
         char **memos = audio_list_memos(&count);
         if (!memos || count == 0) continue;
 
         ESP_LOGI(TAG, "Syncing %d memo(s)...", count);
         int synced = 0;
+        int attempted = 0;
+        char last_title[64] = {0};
 
         for (int i = 0; i < count; i++) {
             char status_buf[48];
@@ -464,17 +468,13 @@ void network_sync_task(void *arg) {
             }
 
             char title[64] = {0};
+            attempted++;
             esp_err_t err = network_upload_memo(memos[i], title, sizeof(title));
             if (err == ESP_OK) {
                 audio_delete_memo(memos[i]);
                 synced++;
+                strncpy(last_title, title, sizeof(last_title) - 1);
                 ESP_LOGI(TAG, "Synced: %s -> \"%s\"", memos[i], title);
-
-                // Show full-screen result after the last memo
-                if (i == count - 1) {
-                    display_update_sync_status(NULL);
-                    display_show_sync_result(title, true);
-                }
             } else {
                 ESP_LOGW(TAG, "Failed to sync %s, will retry", memos[i]);
                 char retry_buf[48];
@@ -489,10 +489,13 @@ void network_sync_task(void *arg) {
         display_update_sync_status(NULL);
         display_update_queue_badge(audio_get_memo_count());
 
-        // If nothing synced at all, show failure on the full screen
-        if (synced == 0) {
+        // Show sync result only when a real transfer occurred
+        if (synced > 0) {
+            display_show_sync_result(last_title, true);
+        } else if (attempted > 0) {
             display_show_sync_result("Sync failed", false);
         }
+        // else: all memos skipped (playback in progress) — no screen nav
 
         // Suspend WiFi if queue is now empty after syncing
         if (audio_get_memo_count() == 0) {

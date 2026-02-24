@@ -93,3 +93,12 @@ idf.py -p COMx flash monitor
 ## Status
 
 Fully functional.
+
+## Troubleshooting / Bug Fixes
+
+- **Periodic White Flash / Reboot Loop:** The device would occasionally crash and reboot (showing a white flash on startup) when entering light sleep. This was caused by the LVGL touch driver polling the I2C bus while it was powered down by the system. This was fixed by:
+  - Adding `esp_pm_lock`s to keep the display and APB bus awake while active.
+  - Removing a fatal `ESP_ERROR_CHECK` in the `espressif__esp_lvgl_port` touch driver so occasional I2C glitches during sleep power transitions don't crash the entire system.
+  - Disabling auto light sleep while connected to USB (`CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y` in `sdkconfig.defaults`) so the Serial/JTAG console doesn't disconnect.
+- **Clock Stuck at 00:00:** The SNTP time sync failed to start because it attempted to use 2 time servers but the lwIP networking stack was only configured for 1. Fixed by setting `CONFIG_LWIP_SNTP_MAX_SERVERS=2` in `sdkconfig.defaults` and explicitly setting `.start = true` in the `esp_sntp_config_t` struct in `network.c`.
+- **Font Size Button Unresponsive on Settings Screen:** Toggling the font size updated the rest of the UI but not the settings screen itself. This was because the text labels on the settings screen were created as local variables and couldn't be referenced when the theme updated. Fixed by promoting the labels to global variables and explicitly applying the new font sizing to them in `display_apply_theme()`.
