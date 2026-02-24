@@ -110,8 +110,8 @@ void *display_get_i2c_handle(void);
  * display_tick_inactivity() — call once per second (when not recording) to
  *   advance the inactivity counter and sleep after DISPLAY_SLEEP_TIMEOUT_SEC.
  */
-#define DISPLAY_SLEEP_TIMEOUT_SEC  10
-#define DISPLAY_DIM_TIMEOUT_SEC   60  // Dim after this many seconds on USB power
+#define DISPLAY_SLEEP_TIMEOUT_SEC   5  // was 10 — battery: dim at 2.5s, sleep at 5s
+#define DISPLAY_DIM_TIMEOUT_SEC    30  // was 60 — USB: dim at 30s
 
 void display_sleep(void);
 void display_wake(void);

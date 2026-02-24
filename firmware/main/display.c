@@ -458,6 +458,9 @@ static void set_ambient_mode(bool active) {
         lv_obj_clear_flag(lbl_sync_progress,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(lbl_prompt,         LV_OBJ_FLAG_HIDDEN);
     }
+    // Throttle LVGL refresh to 1fps in ambient (clock only), 50ms on active screens
+    lv_timer_t *refr = lv_display_get_refr_timer(lv_display_get_default());
+    if (refr) lv_timer_set_period(refr, active ? 1000 : 50);
 }
 
 static void create_idle_screen(void) {
@@ -1331,6 +1334,9 @@ void display_show_screen(screen_id_t screen) {
         lvgl_port_lock(0);
         lv_scr_load_anim(screens[screen], LV_SCR_LOAD_ANIM_FADE_IN, 200, 0, false);
         current_screen = screen;
+        // Kick the refresh timer so transitions don't stall if ambient 1fps timer is active
+        lv_timer_t *refr = lv_display_get_refr_timer(lv_display_get_default());
+        if (refr) lv_timer_ready(refr);
         lvgl_port_unlock();
     }
 }
