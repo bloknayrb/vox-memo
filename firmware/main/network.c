@@ -155,6 +155,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                 .renew_servers_after_new_IP = false,
                 .index_of_first_server = 0,
                 .ip_event_to_renew = 0,
+                .wait_for_sync = true,          // creates semaphore for esp_netif_sntp_sync_wait()
                 .sync_cb = sntp_sync_time_cb,
                 .num_of_servers = 2,
                 .start = true,
@@ -432,6 +433,11 @@ void network_sync_task(void *arg) {
         if (usb_sync_in_progress()) continue;
 
         if (audio_get_memo_count() == 0) {
+            // Give SNTP a chance to sync the clock before killing WiFi.
+            // Returns immediately if already synced; times out in 5s if server unreachable.
+            if (sntp_started) {
+                esp_netif_sntp_sync_wait(pdMS_TO_TICKS(5000));
+            }
             network_suspend();
             continue;
         }

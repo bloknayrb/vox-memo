@@ -123,8 +123,16 @@ void app_main(void) {
     // during the 1s wait. Status updates run at ~1Hz using wall-clock tracking.
     QueueHandle_t evt_q = touch_get_event_queue();
     bool prev_vbus = false;
-    int batt_tick = 0;
     int64_t last_status_us = 0;
+
+    // Read battery once immediately so the idle screen shows a real value at boot
+    {
+        int batt = axp2101_get_battery_percent();
+        if (batt >= 0) {
+            display_update_battery(batt, axp2101_is_vbus_present());
+        }
+    }
+    int batt_tick = 0;
 
     while (1) {
         uint32_t gpio_num = 0;

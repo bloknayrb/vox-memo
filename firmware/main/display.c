@@ -54,6 +54,10 @@ static lv_obj_t *lbl_queue = NULL;
 static lv_obj_t *lbl_battery = NULL;
 static lv_obj_t *lbl_sync_progress = NULL;
 
+static int   s_batt_pct      = -1;   // cached from last display_update_battery() call
+static bool  s_batt_charging = false;
+static bool  s_wifi_connected = false;
+
 // Recording screen widgets
 static lv_obj_t *lbl_rec_time = NULL;
 static lv_obj_t *lbl_rec_hint = NULL;
@@ -435,14 +439,13 @@ static void delete_btn_cb(lv_event_t *e) {
 // Switch idle screen between ambient (large centered clock) and normal layout.
 // Must be called with the LVGL port lock held.
 static void set_ambient_mode(bool active) {
-    if (!lbl_time || !idle_clock_card || !idle_status_bar) return;
+    if (!lbl_time || !idle_clock_card) return;
     ambient_clock_active = active;
     if (active) {
         // Enlarge clock card and use biggest font
         lv_obj_set_size(idle_clock_card, 320, 160);
         lv_obj_set_pos(idle_clock_card, (DISP_WIDTH - 320) / 2, 100);
         lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_48, 0);
-        lv_obj_add_flag(idle_status_bar,    LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_sync_progress,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_prompt,         LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -452,7 +455,6 @@ static void set_ambient_mode(bool active) {
         const lv_font_t *font_clock = settings_get()->font_large
             ? &lv_font_montserrat_44 : &lv_font_montserrat_36;
         lv_obj_set_style_text_font(lbl_time, font_clock, 0);
-        lv_obj_clear_flag(idle_status_bar,    LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(lbl_sync_progress,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(lbl_prompt,         LV_OBJ_FLAG_HIDDEN);
     }
@@ -486,7 +488,7 @@ static void create_idle_screen(void) {
 
     lbl_battery = lv_label_create(idle_status_bar);
     lv_obj_set_style_text_font(lbl_battery, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(lbl_battery, lv_color_hex(0x3A6B52), 0);
+    lv_obj_set_style_text_color(lbl_battery, lv_color_hex(0xDDDDDD), 0);
     lv_label_set_text(lbl_battery, "--%");
     lv_obj_align(lbl_battery, LV_ALIGN_RIGHT_MID, -14, 0);
 
@@ -998,8 +1000,26 @@ void display_apply_theme(void) {
         }
     }
     if (lbl_date)          lv_obj_set_style_text_font(lbl_date, font_small, 0);
-    if (lbl_wifi)          lv_obj_set_style_text_font(lbl_wifi, font_small, 0);
-    if (lbl_battery)       lv_obj_set_style_text_font(lbl_battery, font_small, 0);
+    if (lbl_wifi) {
+        lv_obj_set_style_text_font(lbl_wifi, font_small, 0);
+        if (s_wifi_connected) {
+            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xFFFFFF), 0);
+        }
+    }
+    if (lbl_battery) {
+        lv_obj_set_style_text_font(lbl_battery, font_small, 0);
+        if (s_batt_pct >= 0) {
+            lv_color_t bc;
+            if (s_batt_pct < 20 && !s_batt_charging) {
+                bc = lv_color_hex(0xCC4444);
+            } else if (s_batt_pct < 40 && !s_batt_charging) {
+                bc = lv_color_hex(0xCCAA44);
+            } else {
+                bc = lv_color_hex(0xDDDDDD);
+            }
+            lv_obj_set_style_text_color(lbl_battery, bc, 0);
+        }
+    }
     if (lbl_queue) {
         lv_obj_set_style_bg_color(lbl_queue, accent, 0);
         lv_obj_set_style_text_font(lbl_queue, font_small, 0);
@@ -1339,19 +1359,24 @@ void display_update_time(int hour, int min) {
 
 void display_update_wifi(wifi_display_state_t state, const char *ssid) {
     if (!display_ready || !lbl_wifi) return;
+    s_wifi_connected = (state == WIFI_DISPLAY_CONNECTED);
     lvgl_port_lock(0);
     switch (state) {
         case WIFI_DISPLAY_CONNECTED:
             lv_label_set_text(lbl_wifi, (ssid && ssid[0]) ? ssid : "Wi-Fi");
+            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0xFFFFFF), 0);
             break;
         case WIFI_DISPLAY_CONNECTING:
             lv_label_set_text(lbl_wifi, "Connecting...");
+            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x3A6B52), 0);
             break;
         case WIFI_DISPLAY_SUSPENDED:
             lv_label_set_text(lbl_wifi, "Wi-Fi idle");
+            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x3A6B52), 0);
             break;
         default:
             lv_label_set_text(lbl_wifi, "No Wi-Fi");
+            lv_obj_set_style_text_color(lbl_wifi, lv_color_hex(0x3A6B52), 0);
             break;
     }
     lvgl_port_unlock();
@@ -1373,20 +1398,21 @@ void display_update_queue_badge(int count) {
 
 void display_update_battery(int percent, bool charging) {
     if (!display_ready || !lbl_battery) return;
+    s_batt_pct = percent;
+    s_batt_charging = charging;
     lvgl_port_lock(0);
     if (charging) {
         lv_label_set_text_fmt(lbl_battery, "%d%% +", percent);
     } else {
         lv_label_set_text_fmt(lbl_battery, "%d%%", percent);
     }
-    // Color: red <20%, yellow <40%, sage green otherwise
     lv_color_t color;
     if (percent < 20 && !charging) {
         color = lv_color_hex(0xCC4444);  // red
     } else if (percent < 40 && !charging) {
-        color = lv_color_hex(0xCCAA44);  // yellow
+        color = lv_color_hex(0xCCAA44);  // amber
     } else {
-        color = lv_color_hex(0x3A6B52);  // dim sage (matches style_dim)
+        color = lv_color_hex(0xDDDDDD);  // bright gray — always readable on black AMOLED
     }
     lv_obj_set_style_text_color(lbl_battery, color, 0);
     lvgl_port_unlock();
